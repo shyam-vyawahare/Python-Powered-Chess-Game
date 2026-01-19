@@ -1,13 +1,14 @@
 from typing import Optional, Set, Tuple, List
 from pathlib import Path
 import pygame
+import random
 from ..game_logic import Game
 from ..ai_opponent import choose_ai_move, AI_SETTINGS
 from ..utils import Color, Move, indices_to_square
 from ..pieces import PieceType
 from .chess_board_ui import BoardRenderer, BOARD_SIZE, SQUARE_SIZE
-from .menu_handler import ButtonBar
-from .dialogs import PromotionDialog, MessageOverlay
+from .menu_handler import ButtonBar, Button
+from .dialogs import PromotionDialog, MessageOverlay, WinningDialog
 
 
 WINDOW_WIDTH = BOARD_SIZE + 260
@@ -91,32 +92,6 @@ class MoveAnimation:
     def is_done(self) -> bool:
         return self.progress() >= 1.0
 
-class Button:
-    def __init__(self, rect, text, callback):
-        self.rect = pygame.Rect(rect)
-        self.text = text
-        self.callback = callback
-        self.hovered = False
-
-    def handle_mouse_move(self, pos):
-        self.hovered = self.rect.collidepoint(pos)
-
-    def handle_mouse_down(self, pos):
-        if self.rect.collidepoint(pos):
-            self.callback()
-
-    def draw(self, screen, font):
-        color = (100, 160, 220) if self.hovered else (70, 130, 180)
-
-        pygame.draw.rect(screen, color, self.rect, border_radius=8)
-        pygame.draw.rect(screen, (255, 255, 255), self.rect, 2, border_radius=8)
-
-        text_surf = font.render(self.text, True, (255, 255, 255))
-        text_rect = text_surf.get_rect(center=self.rect.center)
-        screen.blit(text_surf, text_rect)
-
-
-
 class GameWindow:
     def __init__(self) -> None:
         pygame.init()
@@ -133,7 +108,8 @@ class GameWindow:
         self.message_overlay = MessageOverlay(
             pygame.Rect(0, WINDOW_HEIGHT - 40, WINDOW_WIDTH, 30),
         )
-        base_dir = Path(__file__).resolve().parent.parent.parent
+        # Assets are located in chess_game/gui/assets/pieces
+        base_dir = Path(__file__).resolve().parent
         pieces_dir = base_dir / "assets" / "pieces"
         self.board_renderer.piece_images.load(pieces_dir)
         self.board_renderer.piece_images.set_mode_images()
@@ -143,8 +119,8 @@ class GameWindow:
         self.button_bar.add_button("New Game", self.new_game)
         self.button_bar.add_button("Undo", self.undo_move)
         self.button_bar.add_button("Hint", self.hint)
-        self.button_bar.add_button("Settings", self.toggle_piece_display_mode)
-        self.button_bar.add_button("Menu", self.return_to_menu)
+        self.button_bar.add_button("Settings", self.menu_settings)
+        self.button_bar.add_button("Main Menu", self.return_to_menu)
         self.mode_human_vs_ai = True
         self.human_color = Color.WHITE
         self.ai_color = Color.BLACK
@@ -153,12 +129,35 @@ class GameWindow:
         self.ai_depth = 3
         self.ai_randomness = 0.1
         self.promotion_dialog: Optional[PromotionDialog] = None
+        self.winning_dialog: Optional[WinningDialog] = None
         self.current_animation: Optional[MoveAnimation] = None
         self.pending_move: Optional[Tuple[Move, bool]] = None
         self.state = "menu"
-        self.menu_buttons: List = []
-        self.difficulty_buttons: List = []
+        self.settings = {
+            "theme": "Green",
+            "sound_move": True,
+            "sound_capture": True
+        }
+        self.menu_buttons: List[Button] = []
+        self.difficulty_buttons: List[Button] = []
+        self.settings_buttons: List[Button] = []
+        self.color_buttons: List[Button] = []
+        self.background_surface = self._create_background()
         self.create_menus()
+        self.create_settings_buttons()
+        self.create_color_buttons()
+
+    def _create_background(self) -> pygame.Surface:
+        surface = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT))
+        top_color = (40, 44, 52)
+        bottom_color = (20, 20, 20)
+        for y in range(WINDOW_HEIGHT):
+            ratio = y / WINDOW_HEIGHT
+            r = int(top_color[0] * (1 - ratio) + bottom_color[0] * ratio)
+            g = int(top_color[1] * (1 - ratio) + bottom_color[1] * ratio)
+            b = int(top_color[2] * (1 - ratio) + bottom_color[2] * ratio)
+            pygame.draw.line(surface, (r, g, b), (0, y), (WINDOW_WIDTH, y))
+        return surface
 
     def create_menus(self) -> None:
         center_x = WINDOW_WIDTH // 2
@@ -188,6 +187,83 @@ class GameWindow:
                 cb = lambda lvl=label: self.menu_start_single_with_level(lvl)
             self.difficulty_buttons.append(Button(rect, label, cb))
 
+    def create_settings_buttons(self) -> None:
+        center_x = WINDOW_WIDTH // 2
+        start_y = WINDOW_HEIGHT // 2 - 80
+        w = 260
+        h = 40
+        # Will be updated in draw or update loop based on current settings, but initialized here
+        # Actually, let's just create the rects and callbacks, and text will be dynamic or buttons updated
+        # Simpler: Recreate buttons when entering settings or updating them.
+        pass
+
+    def update_settings_buttons(self) -> None:
+        self.settings_buttons = []
+        center_x = WINDOW_WIDTH // 2
+        start_y = WINDOW_HEIGHT // 2 - 140
+        
+        # Helper to create a row of radio buttons
+        def add_row(y, options, current_val, callback_factory):
+            total_w = sum(opt[1] for opt in options) + (len(options) - 1) * 10
+            start_x = center_x - total_w // 2
+            current_x = start_x
+            
+            for label, w, val in options:
+                is_selected = (val == current_val)
+                cb = callback_factory(val)
+                rect = pygame.Rect(current_x, y, w, 40)
+                self.settings_buttons.append(Button(rect, label, cb, selected=is_selected))
+                current_x += w + 10
+
+        # Piece Mode
+        mode = self.board_renderer.piece_images.mode
+        add_row(start_y, [("Logos", 100, "images"), ("Letters", 100, "letters")], mode, 
+                lambda v: (lambda: self.set_piece_mode(v)))
+        
+        # Theme
+        curr_theme = self.settings["theme"]
+        themes = [("Classic", 80, "Classic"), ("Blue", 60, "Blue"), ("Green", 70, "Green"), ("B&W", 60, "B&W")]
+        add_row(start_y + 60, themes, curr_theme, lambda v: (lambda: self.set_theme_mode(v)))
+        
+        # Sound
+        snd = self.settings["sound_move"]
+        add_row(start_y + 120, [("Sound On", 100, True), ("Sound Off", 100, False)], snd, 
+                lambda v: (lambda: self.set_sound_mode(v)))
+
+        # Back
+        self.settings_buttons.append(Button(pygame.Rect(center_x - 100, start_y + 200, 200, 40), "Back", self.menu_back_to_main))
+
+    def set_piece_mode(self, mode: str) -> None:
+        if mode == "images":
+            self.board_renderer.piece_images.set_mode_images()
+        else:
+            self.board_renderer.piece_images.set_mode_letters()
+        self.update_settings_buttons()
+
+    def set_theme_mode(self, theme: str) -> None:
+        self.settings["theme"] = theme
+        self.board_renderer.set_theme(theme)
+        self.update_settings_buttons()
+
+    def set_sound_mode(self, enabled: bool) -> None:
+        self.settings["sound_move"] = enabled
+        self.settings["sound_capture"] = enabled
+        self.update_settings_buttons()
+
+    def create_color_buttons(self) -> None:
+        center_x = WINDOW_WIDTH // 2
+        start_y = WINDOW_HEIGHT // 2 - 40
+        w = 220
+        h = 40
+        labels = ["Play as White", "Play as Black", "Random", "Back"]
+        callbacks = [
+            lambda: self.set_human_color(Color.WHITE),
+            lambda: self.set_human_color(Color.BLACK),
+            lambda: self.set_human_color(None),
+            self.menu_back_to_difficulty
+        ]
+        self.color_buttons = [Button(pygame.Rect(center_x - w//2, start_y + i*(h+10), w, h), labels[i], callbacks[i]) for i in range(4)]
+
     def apply_ai_settings(self) -> None:
         level = self.ai_level_names[self.ai_level_index]
         settings = AI_SETTINGS.get(level, AI_SETTINGS["Medium"])
@@ -210,33 +286,74 @@ class GameWindow:
         self.state = "playing"
 
     def menu_settings(self) -> None:
-        self.toggle_piece_display_mode()
+        self.state = "settings"
+        self.update_settings_buttons()
 
     def menu_back_to_main(self) -> None:
         self.state = "menu"
+        
+    def menu_back_to_difficulty(self) -> None:
+        self.state = "difficulty"
 
     def menu_start_single_with_level(self, level_label: str) -> None:
         if level_label in self.ai_level_names:
             self.ai_level_index = self.ai_level_names.index(level_label)
         self.apply_ai_settings()
+        self.state = "color_selection"
+        
+    def set_human_color(self, color: Optional[Color]) -> None:
         self.mode_human_vs_ai = True
-        self.human_color = Color.WHITE
-        self.ai_color = Color.BLACK
+        if color is None:
+            self.human_color = random.choice([Color.WHITE, Color.BLACK])
+        else:
+            self.human_color = color
+        self.ai_color = self.human_color.opposite
         self.new_game()
         self.state = "playing"
+        # If AI is white, trigger first move
+        self.maybe_start_ai_move()
 
     def toggle_piece_display_mode(self) -> None:
         images_mode = self.board_renderer.piece_images.mode == "images"
         if images_mode:
             self.board_renderer.piece_images.set_mode_letters()
-            self.message_overlay.show("Piece style: Letters", frames=180)
+            self.message_overlay.show("Piece style: Letters", frames=60)
         else:
             self.board_renderer.piece_images.set_mode_images()
-            self.message_overlay.show("Piece style: Images", frames=180)
+            self.message_overlay.show("Piece style: Images", frames=60)
+        if self.state == "settings":
+            self.update_settings_buttons()
+
+    def cycle_theme(self) -> None:
+        themes = list(self.board_renderer.themes.keys())
+        current = self.settings["theme"]
+        try:
+            idx = themes.index(current)
+            next_idx = (idx + 1) % len(themes)
+        except ValueError:
+            next_idx = 0
+        new_theme = themes[next_idx]
+        self.settings["theme"] = new_theme
+        self.board_renderer.set_theme(new_theme)
+        if self.state == "settings":
+            self.update_settings_buttons()
+            
+    def toggle_sound(self) -> None:
+        self.settings["sound_move"] = not self.settings["sound_move"]
+        self.settings["sound_capture"] = self.settings["sound_move"]
+        if self.state == "settings":
+            self.update_settings_buttons()
+
+    def restart_game(self) -> None:
+        self.new_game()
+        self.state = "playing"
+        self.winning_dialog = None
+        self.maybe_start_ai_move()
 
     def return_to_menu(self) -> None:
         self.new_game()
         self.state = "menu"
+        self.winning_dialog = None
 
     def quit_game(self) -> None:
         self.running = False
@@ -408,14 +525,40 @@ class GameWindow:
             elif self.game.is_in_check():
                 status = "Check"
         y = panel_rect.y + 10
-        for label in [
-            "Game Info",
-            "Turn: " + turn,
-            "Status: " + status,
-        ]:
-            text = self.side_font.render(label, True, TEXT_COLOR)
-            self.screen.blit(text, (panel_rect.x + 10, y))
+        
+        # Game Info
+        text = self.side_font.render("Game Info", True, TEXT_COLOR)
+        self.screen.blit(text, (panel_rect.x + 10, y))
+        y += 24
+        
+        # Turn
+        text = self.side_font.render("Turn: " + turn, True, TEXT_COLOR)
+        self.screen.blit(text, (panel_rect.x + 10, y))
+        y += 24
+        
+        # Status (Wrapped)
+        status_prefix = "Status: "
+        full_status = status_prefix + status
+        
+        words = full_status.split(' ')
+        current_line = []
+        
+        for word in words:
+            test_line = ' '.join(current_line + [word])
+            w, h = self.side_font.size(test_line)
+            if w < panel_rect.width - 20:
+                current_line.append(word)
+            else:
+                if current_line:
+                    line_surf = self.side_font.render(' '.join(current_line), True, TEXT_COLOR)
+                    self.screen.blit(line_surf, (panel_rect.x + 10, y))
+                    y += 24
+                current_line = [word]
+        if current_line:
+            line_surf = self.side_font.render(' '.join(current_line), True, TEXT_COLOR)
+            self.screen.blit(line_surf, (panel_rect.x + 10, y))
             y += 24
+            
         y += 10
         text = self.side_font.render("Captured White:", True, TEXT_COLOR)
         self.screen.blit(text, (panel_rect.x + 10, y))
@@ -450,10 +593,23 @@ class GameWindow:
         text = self.side_font.render("Moves:", True, TEXT_COLOR)
         self.screen.blit(text, (panel_rect.x + 10, y))
         y += 22
+        
+        # Format moves into "1. e4 e5" style
+        formatted_lines = []
+        for i in range(0, len(self.game.move_log), 2):
+            move_num = i // 2 + 1
+            white_move = self.game.move_log[i]
+            if i + 1 < len(self.game.move_log):
+                black_move = self.game.move_log[i+1]
+                formatted_lines.append(f"{move_num}. {white_move} {black_move}")
+            else:
+                formatted_lines.append(f"{move_num}. {white_move}")
+                
         max_lines = 12
-        recent_moves = self.game.move_log[-max_lines:]
-        for idx, entry in enumerate(recent_moves, start=max(1, len(self.game.move_log) - len(recent_moves) + 1)):
-            line = f"{idx}: {entry}"
+        start_idx = max(0, len(formatted_lines) - max_lines)
+        display_lines = formatted_lines[start_idx:]
+        
+        for line in display_lines:
             glyph = self.small_font.render(line, True, TEXT_COLOR)
             self.screen.blit(glyph, (panel_rect.x + 10, y))
             y += 18
@@ -462,7 +618,15 @@ class GameWindow:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 self.running = False
-            elif event.type == pygame.KEYDOWN:
+            
+            if self.winning_dialog is not None:
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    self.winning_dialog.handle_mouse_down(event.pos)
+                elif event.type == pygame.MOUSEMOTION:
+                    self.winning_dialog.handle_mouse_move(event.pos)
+                continue
+
+            if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     if self.state == "playing":
                         self.return_to_menu()
@@ -476,6 +640,12 @@ class GameWindow:
                         b.handle_mouse_move(pos)
                 elif self.state == "difficulty":
                     for b in self.difficulty_buttons:
+                        b.handle_mouse_move(pos)
+                elif self.state == "settings":
+                    for b in self.settings_buttons:
+                        b.handle_mouse_move(pos)
+                elif self.state == "color_selection":
+                    for b in self.color_buttons:
                         b.handle_mouse_move(pos)
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 pos = event.pos
@@ -493,9 +663,19 @@ class GameWindow:
                 elif self.state == "difficulty":
                     for b in self.difficulty_buttons:
                         b.handle_mouse_down(pos)
+                elif self.state == "settings":
+                    for b in self.settings_buttons:
+                        b.handle_mouse_down(pos)
+                elif self.state == "color_selection":
+                    for b in self.color_buttons:
+                        b.handle_mouse_down(pos)
 
     def draw(self) -> None:
-        self.screen.fill((20, 20, 20))
+        if self.state in ["menu", "difficulty", "settings", "color_selection"]:
+            self.screen.blit(self.background_surface, (0, 0))
+        else:
+            self.screen.fill((20, 20, 20))
+
         if self.state == "menu":
             title = self.side_font.render("Chess Game", True, (255, 255, 255))
             rect = title.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 - 130))
@@ -510,6 +690,24 @@ class GameWindow:
             rect = title.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 - 130))
             self.screen.blit(title, rect)
             for b in self.difficulty_buttons:
+                b.draw(self.screen, self.button_font)
+            self.message_overlay.draw(self.screen, self.small_font)
+            pygame.display.flip()
+            return
+        if self.state == "settings":
+            title = self.side_font.render("Settings", True, (255, 255, 255))
+            rect = title.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 - 150))
+            self.screen.blit(title, rect)
+            for b in self.settings_buttons:
+                b.draw(self.screen, self.button_font)
+            self.message_overlay.draw(self.screen, self.small_font)
+            pygame.display.flip()
+            return
+        if self.state == "color_selection":
+            title = self.side_font.render("Choose Your Side", True, (255, 255, 255))
+            rect = title.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 - 100))
+            self.screen.blit(title, rect)
+            for b in self.color_buttons:
                 b.draw(self.screen, self.button_font)
             self.message_overlay.draw(self.screen, self.small_font)
             pygame.display.flip()
@@ -559,6 +757,18 @@ class GameWindow:
                 temp.set_alpha(int(255 * alpha_t))
                 rect = temp.get_rect(center=(int(pos[0]), int(pos[1])))
                 self.screen.blit(temp, rect)
+        
+        if self.game.result and self.winning_dialog is None:
+            self.winning_dialog = WinningDialog(
+                pygame.Rect(WINDOW_WIDTH // 2 - 150, WINDOW_HEIGHT // 2 - 100, 300, 200),
+                self.game.result,
+                self.restart_game,
+                self.return_to_menu
+            )
+            
+        if self.winning_dialog is not None:
+            self.winning_dialog.draw(self.screen, self.button_font)
+
         pygame.display.flip()
 
     def run(self) -> None:

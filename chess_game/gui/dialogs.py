@@ -1,4 +1,4 @@
-from typing import Optional, Callable, List
+from typing import Optional, Callable, List, Tuple
 import pygame
 
 
@@ -50,8 +50,81 @@ class MessageOverlay:
         if self.frames_remaining <= 0 or not self.text:
             return
         self.frames_remaining -= 1
-        pygame.draw.rect(surface, (0, 0, 0, 150), self.rect)
+        # Create a surface with alpha channel for transparency
+        s = pygame.Surface((self.rect.width, self.rect.height), pygame.SRCALPHA)
+        s.fill((0, 0, 0, 150))
+        surface.blit(s, self.rect)
+        
         text = font.render(self.text, True, (255, 255, 255))
         rect = text.get_rect(center=self.rect.center)
         surface.blit(text, rect)
+
+
+class WinningDialog:
+    def __init__(
+        self,
+        rect: pygame.Rect,
+        title: str,
+        on_restart: Callable[[], None],
+        on_menu: Callable[[], None]
+    ) -> None:
+        self.rect = rect
+        self.title = title
+        self.on_restart = on_restart
+        self.on_menu = on_menu
+        
+        # Calculate button rects
+        w = 120
+        h = 40
+        spacing = 20
+        total_w = 2 * w + spacing
+        start_x = rect.centerx - total_w // 2
+        y = rect.centery + 10
+        
+        self.restart_rect = pygame.Rect(start_x, y, w, h)
+        self.menu_rect = pygame.Rect(start_x + w + spacing, y, w, h)
+        self.hover_restart = False
+        self.hover_menu = False
+
+    def draw(self, surface: pygame.Surface, font: pygame.font.Font) -> None:
+        # Overlay background (full screen dim)
+        overlay = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 180))
+        surface.blit(overlay, (0, 0))
+        
+        # Dialog box
+        pygame.draw.rect(surface, (50, 50, 50), self.rect, border_radius=12)
+        pygame.draw.rect(surface, (255, 255, 255), self.rect, 2, border_radius=12)
+        
+        # Title
+        title_surf = font.render(self.title, True, (255, 255, 255))
+        title_rect = title_surf.get_rect(center=(self.rect.centerx, self.rect.y + 40))
+        surface.blit(title_surf, title_rect)
+        
+        # Buttons
+        restart_color = (66, 224, 133) if self.hover_restart else (46, 204, 113)
+        menu_color = (251, 96, 80) if self.hover_menu else (231, 76, 60)
+        
+        self._draw_button(surface, font, self.restart_rect, "Restart", restart_color)
+        self._draw_button(surface, font, self.menu_rect, "Main Menu", menu_color)
+
+    def _draw_button(self, surface, font, rect, text, color):
+        pygame.draw.rect(surface, color, rect, border_radius=8)
+        pygame.draw.rect(surface, (255, 255, 255), rect, 1, border_radius=8)
+        txt = font.render(text, True, (255, 255, 255))
+        txt_rect = txt.get_rect(center=rect.center)
+        surface.blit(txt, txt_rect)
+
+    def handle_mouse_move(self, pos: Tuple[int, int]) -> None:
+        self.hover_restart = self.restart_rect.collidepoint(pos)
+        self.hover_menu = self.menu_rect.collidepoint(pos)
+
+    def handle_mouse_down(self, pos: Tuple[int, int]) -> bool:
+        if self.restart_rect.collidepoint(pos):
+            self.on_restart()
+            return True
+        if self.menu_rect.collidepoint(pos):
+            self.on_menu()
+            return True
+        return False
 

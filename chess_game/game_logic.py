@@ -1,7 +1,113 @@
 from typing import List, Optional, Tuple, Dict
 from .board import Board
 from .pieces import Piece, piece_values
-from .utils import Color, PieceType, Move, square_to_indices, indices_to_square, format_move_san_like
+from .utils import Color, PieceType, Move, square_to_indices, indices_to_square, format_move_san_like, file_labels
+
+
+def get_algebraic_notation(board: Board, move: Move) -> str:
+    piece = board.get_piece(move.from_row, move.from_col)
+    if piece is None:
+        return ""
+    
+    if move.is_castling:
+        return "O-O-O" if move.to_col < move.from_col else "O-O"
+    
+    # Determine captured
+    is_capture = board.get_piece(move.to_row, move.to_col) is not None
+    if move.is_en_passant:
+        is_capture = True
+    
+    # Pawn handling
+    if piece.kind is PieceType.PAWN:
+        to_sq = indices_to_square(move.to_row, move.to_col)
+        if is_capture:
+            file_char = file_labels[move.from_col]
+            text = f"{file_char}x{to_sq}"
+        else:
+            text = to_sq
+        if move.promotion:
+            text += f"={move.promotion.value}"
+        return text
+
+    # Piece handling
+    piece_char = piece.symbol().upper()
+    if piece.color is Color.WHITE:
+        # If using unicode symbols, they might be lowercase/uppercase, but standard notation uses uppercase letters for pieces
+        # We need a mapping if piece.symbol() returns unicode. 
+        # Assuming piece.symbol() returns K, Q, R, B, N, P (or unicode). 
+        # Let's rely on PieceType
+        map_kind = {
+            PieceType.KING: "K",
+            PieceType.QUEEN: "Q",
+            PieceType.ROOK: "R",
+            PieceType.BISHOP: "B",
+            PieceType.KNIGHT: "N",
+            PieceType.PAWN: "" # Should not hit this
+        }
+        piece_char = map_kind.get(piece.kind, "")
+    else:
+        # Same for black
+        map_kind = {
+            PieceType.KING: "K",
+            PieceType.QUEEN: "Q",
+            PieceType.ROOK: "R",
+            PieceType.BISHOP: "B",
+            PieceType.KNIGHT: "N",
+            PieceType.PAWN: ""
+        }
+        piece_char = map_kind.get(piece.kind, "")
+
+    # Disambiguation
+    # Find other pieces of same type and color
+    others = []
+    candidates = generate_legal_moves(board, piece.color)
+    for m in candidates:
+        if m.to_row == move.to_row and m.to_col == move.to_col:
+            p = board.get_piece(m.from_row, m.from_col)
+            if p is not None and p.kind == piece.kind and (m.from_row != move.from_row or m.from_col != move.from_col):
+                others.append(m)
+    
+    disambiguation = ""
+    if others:
+        file_diff = False
+        rank_diff = False
+        for m in others:
+            if m.from_col != move.from_col:
+                file_diff = True
+            if m.from_row != move.from_row:
+                rank_diff = True
+        
+        # If files differ, use file. 
+        # If files are same (e.g. two Rooks on same file), use rank.
+        # If both, use both.
+        # Standard rule: File if possible, else Rank.
+        
+        # Check if file is enough
+        file_unique = True
+        for m in others:
+            if m.from_col == move.from_col:
+                file_unique = False
+                break
+        
+        if file_unique:
+            disambiguation = file_labels[move.from_col]
+        else:
+            # Check if rank is enough
+            rank_unique = True
+            for m in others:
+                if m.from_row == move.from_row:
+                    rank_unique = False
+                    break
+            
+            if rank_unique:
+                disambiguation = str(8 - move.from_row)
+            else:
+                disambiguation = f"{file_labels[move.from_col]}{8 - move.from_row}"
+
+    to_sq = indices_to_square(move.to_row, move.to_col)
+    capture_char = "x" if is_capture else ""
+    return f"{piece_char}{disambiguation}{capture_char}{to_sq}"
+
 
 
 def in_bounds(row: int, col: int) -> bool:
@@ -408,8 +514,10 @@ class Game:
         legal_moves = self.get_legal_moves()
         if move not in legal_moves:
             return False
-        from_sq = indices_to_square(move.from_row, move.from_col)
-        to_sq = indices_to_square(move.to_row, move.to_col)
+            
+        # Generate algebraic notation before move is applied
+        notation = get_algebraic_notation(self.board, move)
+        
         captured = make_move(self.board, move)
         self.history.append(self.board.copy())
         if captured is not None:
@@ -417,11 +525,8 @@ class Game:
                 self.captured_white.append(captured)
             else:
                 self.captured_black.append(captured)
-        text = f"{from_sq}-{to_sq}"
-        if move.promotion is not None:
-            text = f"{from_sq}-{to_sq}={move.promotion.value}"
-        prefix = "W" if color is Color.WHITE else "B"
-        self.move_log.append(f"{prefix}: {text}")
+        
+        self.move_log.append(notation)
         self._update_repetition()
         self.last_move = move
         self.update_result_after_move()

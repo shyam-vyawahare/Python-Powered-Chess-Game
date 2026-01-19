@@ -8,18 +8,40 @@ class Button:
         rect: pygame.Rect,
         label: str,
         callback: Callable[[], None],
+        selected: bool = False,
     ) -> None:
         self.rect = rect
         self.label = label
         self.callback = callback
         self.hover = False
+        self.selected = selected
 
     def draw(self, surface: pygame.Surface, font: pygame.font.Font) -> None:
-        base_color = (70, 70, 70)
-        hover_color = (100, 100, 100)
-        color = hover_color if self.hover else base_color
-        pygame.draw.rect(surface, color, self.rect, border_radius=4)
-        text = font.render(self.label, True, (230, 230, 230))
+        if self.selected:
+            color = (46, 204, 113)  # Green for selected
+            text_color = (255, 255, 255)
+            border_color = (255, 255, 255)
+        elif self.hover:
+            color = (100, 100, 100)
+            text_color = (255, 255, 255)
+            border_color = (200, 200, 200)
+        else:
+            color = (70, 70, 70)
+            text_color = (220, 220, 220)
+            border_color = (120, 120, 120)
+
+        # Shadow
+        shadow_rect = self.rect.copy()
+        shadow_rect.y += 2
+        pygame.draw.rect(surface, (30, 30, 30), shadow_rect, border_radius=6)
+
+        # Main Body
+        pygame.draw.rect(surface, color, self.rect, border_radius=6)
+        
+        # Border
+        pygame.draw.rect(surface, border_color, self.rect, 1, border_radius=6)
+
+        text = font.render(self.label, True, text_color)
         rect = text.get_rect(center=self.rect.center)
         surface.blit(text, rect)
 

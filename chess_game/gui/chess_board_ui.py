@@ -96,6 +96,20 @@ class BoardRenderer:
         self.piece_images = PieceImages()
         self.hover_square: Optional[Tuple[int, int]] = None
         self.invalid_flash_frames = 0
+        
+        # Theme support
+        self.themes = {
+            "Classic": ((240, 217, 181), (181, 136, 99)),
+            "Blue": ((232, 235, 239), (125, 135, 150)),
+            "Green": ((238, 238, 210), (118, 150, 86)),
+            "B&W": ((240, 240, 240), (50, 50, 50)),
+        }
+        self.light_square_color = self.themes["Green"][0]
+        self.dark_square_color = self.themes["Green"][1]
+
+    def set_theme(self, theme_name: str) -> None:
+        if theme_name in self.themes:
+            self.light_square_color, self.dark_square_color = self.themes[theme_name]
 
     def board_rect(self) -> pygame.Rect:
         return pygame.Rect(self.offset_x, self.offset_y, BOARD_SIZE, BOARD_SIZE)
@@ -138,9 +152,9 @@ class BoardRenderer:
             for col in range(8):
                 rect = self.square_to_rect(row, col)
                 if (row + col) % 2 == 0:
-                    color = LIGHT_SQUARE
+                    color = self.light_square_color
                 else:
-                    color = DARK_SQUARE
+                    color = self.dark_square_color
                 if flash:
                     color = HIGHLIGHT_INVALID
                 pygame.draw.rect(surface, color, rect)
