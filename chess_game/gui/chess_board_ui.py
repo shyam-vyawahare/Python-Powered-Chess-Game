@@ -145,7 +145,7 @@ class BoardRenderer:
         hide_pieces: Set[Tuple[int, int]],
         king_in_check: Optional[Tuple[int, int]],
     ) -> None:
-        flash = self.invalid_flash_frames > 0
+        # Flash removed as per request
         if self.invalid_flash_frames > 0:
             self.invalid_flash_frames -= 1
         for row in range(8):
@@ -155,8 +155,6 @@ class BoardRenderer:
                     color = self.light_square_color
                 else:
                     color = self.dark_square_color
-                if flash:
-                    color = HIGHLIGHT_INVALID
                 pygame.draw.rect(surface, color, rect)
         if last_move is not None:
             for r, c in [

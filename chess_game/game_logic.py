@@ -123,13 +123,18 @@ def locate_king(board: Board, color: Color) -> Optional[Tuple[int, int]]:
 
 def is_square_attacked(board: Board, row: int, col: int, by_color: Color) -> bool:
     pawn_dir = -1 if by_color is Color.WHITE else 1
-    for dc in (-1, 1):
-        pr = row + pawn_dir
-        pc = col + dc
-        if in_bounds(pr, pc):
-            piece = board.get_piece(pr, pc)
-            if piece is not None and piece.color is by_color and piece.kind is PieceType.PAWN:
-                return True
+    # Check for pawn attacks
+    # A pawn at (row - pawn_dir, col +/- 1) attacks (row, col)
+    # because it moves in pawn_dir.
+    pawn_row = row - pawn_dir
+    if in_bounds(pawn_row, col):
+        for dc in (-1, 1):
+            pc = col + dc
+            if in_bounds(pawn_row, pc):
+                piece = board.get_piece(pawn_row, pc)
+                if piece is not None and piece.color is by_color and piece.kind is PieceType.PAWN:
+                    return True
+    
     knight_offsets = [
         (-2, -1),
         (-2, 1),
@@ -224,6 +229,8 @@ def generate_pawn_moves(board: Board, row: int, col: int, moves: List[Move]) -> 
             continue
         target = board.get_piece(tr, tc)
         if target is not None and target.color is not color:
+            if target.kind is PieceType.KING:
+                continue
             if tr == 0 or tr == 7:
                 for promo_kind in (PieceType.QUEEN, PieceType.ROOK, PieceType.BISHOP, PieceType.KNIGHT):
                     moves.append(Move(row, col, tr, tc, promotion=promo_kind))
@@ -259,6 +266,8 @@ def generate_knight_moves(board: Board, row: int, col: int, moves: List[Move]) -
             continue
         target = board.get_piece(r, c)
         if target is None or target.color is not color:
+            if target is not None and target.kind is PieceType.KING:
+                continue
             moves.append(Move(row, col, r, c))
 
 
@@ -282,7 +291,8 @@ def generate_sliding_moves(
                 moves.append(Move(row, col, r, c))
             else:
                 if target.color is not color:
-                    moves.append(Move(row, col, r, c))
+                    if target.kind is not PieceType.KING:
+                        moves.append(Move(row, col, r, c))
                 break
             r += dr
             c += dc
@@ -303,6 +313,8 @@ def generate_king_moves(board: Board, row: int, col: int, moves: List[Move]) -> 
                 continue
             target = board.get_piece(r, c)
             if target is None or target.color is not color:
+                if target is not None and target.kind is PieceType.KING:
+                    continue
                 moves.append(Move(row, col, r, c))
     if is_in_check(board, color):
         return
@@ -375,7 +387,7 @@ def make_move(board: Board, move: Move) -> Optional[Piece]:
     target = board.get_piece(move.to_row, move.to_col)
     if move.is_en_passant:
         direction = -1 if piece.color is Color.WHITE else 1
-        captured_row = move.to_row + direction
+        captured_row = move.to_row - direction
         captured_col = move.to_col
         captured = board.get_piece(captured_row, captured_col)
         board.set_piece(captured_row, captured_col, None)

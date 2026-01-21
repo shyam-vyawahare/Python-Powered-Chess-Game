@@ -102,6 +102,7 @@ class GameWindow:
         self.game = Game()
         self.board_renderer = BoardRenderer((40, 20))
         self.side_font = pygame.font.SysFont("arial", 18)
+        self.title_font = pygame.font.SysFont("arial", 48, bold=True)
         self.small_font = pygame.font.SysFont("arial", 14)
         self.button_font = pygame.font.SysFont("arial", 16)
         self.interaction = InteractionState()
@@ -120,7 +121,14 @@ class GameWindow:
         self.button_bar.add_button("Undo", self.undo_move)
         self.button_bar.add_button("Hint", self.hint)
         self.button_bar.add_button("Settings", self.menu_settings)
-        self.button_bar.add_button("Main Menu", self.return_to_menu)
+        # Main Menu button moved to separate location
+        
+        self.btn_main_menu = Button(
+            pygame.Rect(40, WINDOW_HEIGHT - 60, 120, 40),
+            "Main Menu",
+            self.return_to_menu
+        )
+        
         self.mode_human_vs_ai = True
         self.human_color = Color.WHITE
         self.ai_color = Color.BLACK
@@ -569,12 +577,12 @@ class GameWindow:
             if image is not None:
                 small = pygame.transform.smoothscale(
                     image,
-                    (SQUARE_SIZE // 2, SQUARE_SIZE // 2),
+                    (SQUARE_SIZE // 3, SQUARE_SIZE // 3),
                 )
                 rect_img = small.get_rect(topleft=(x, y))
                 self.screen.blit(small, rect_img)
-                x += rect_img.width + 4
-        y += 28
+                x += 20
+        y += 35
         text = self.side_font.render("Captured Black:", True, TEXT_COLOR)
         self.screen.blit(text, (panel_rect.x + 10, y))
         y += 22
@@ -584,11 +592,11 @@ class GameWindow:
             if image is not None:
                 small = pygame.transform.smoothscale(
                     image,
-                    (SQUARE_SIZE // 2, SQUARE_SIZE // 2),
+                    (SQUARE_SIZE // 3, SQUARE_SIZE // 3),
                 )
                 rect_img = small.get_rect(topleft=(x, y))
                 self.screen.blit(small, rect_img)
-                x += rect_img.width + 4
+                x += 20
         y += 32
         text = self.side_font.render("Moves:", True, TEXT_COLOR)
         self.screen.blit(text, (panel_rect.x + 10, y))
@@ -635,6 +643,7 @@ class GameWindow:
                 if self.state == "playing":
                     self.board_renderer.update_hover(pos)
                     self.button_bar.handle_mouse_move(pos)
+                    self.btn_main_menu.handle_mouse_move(pos)
                 elif self.state == "menu":
                     for b in self.menu_buttons:
                         b.handle_mouse_move(pos)
@@ -657,6 +666,7 @@ class GameWindow:
                         self.handle_board_click(pos)
                     else:
                         self.button_bar.handle_mouse_down(pos)
+                        self.btn_main_menu.handle_mouse_down(pos)
                 elif self.state == "menu":
                     for b in self.menu_buttons:
                         b.handle_mouse_down(pos)
@@ -677,8 +687,8 @@ class GameWindow:
             self.screen.fill((20, 20, 20))
 
         if self.state == "menu":
-            title = self.side_font.render("Chess Game", True, (255, 255, 255))
-            rect = title.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 - 130))
+            title = self.title_font.render("Chess Game", True, (255, 255, 255))
+            rect = title.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 - 150))
             self.screen.blit(title, rect)
             for b in self.menu_buttons:
                 b.draw(self.screen, self.button_font)
@@ -686,8 +696,8 @@ class GameWindow:
             pygame.display.flip()
             return
         if self.state == "difficulty":
-            title = self.side_font.render("Select Difficulty", True, (255, 255, 255))
-            rect = title.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 - 130))
+            title = self.title_font.render("Select Difficulty", True, (255, 255, 255))
+            rect = title.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 - 150))
             self.screen.blit(title, rect)
             for b in self.difficulty_buttons:
                 b.draw(self.screen, self.button_font)
@@ -695,9 +705,12 @@ class GameWindow:
             pygame.display.flip()
             return
         if self.state == "settings":
-            title = self.side_font.render("Settings", True, (255, 255, 255))
-            rect = title.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 - 150))
+            title = self.title_font.render("Settings", True, (255, 255, 255))
+            rect = title.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 - 180))
             self.screen.blit(title, rect)
+            pygame.draw.line(self.screen, (100, 100, 100), 
+                             (WINDOW_WIDTH // 2 - 100, rect.bottom + 10), 
+                             (WINDOW_WIDTH // 2 + 100, rect.bottom + 10), 2)
             for b in self.settings_buttons:
                 b.draw(self.screen, self.button_font)
             self.message_overlay.draw(self.screen, self.small_font)
@@ -739,6 +752,7 @@ class GameWindow:
         )
         self.draw_side_panel()
         self.button_bar.draw(self.screen, self.button_font)
+        self.btn_main_menu.draw(self.screen, self.button_font)
         if self.promotion_dialog is not None and self.interaction.awaiting_promotion:
             self.promotion_dialog.draw(self.screen, self.side_font)
         self.message_overlay.draw(self.screen, self.small_font)
@@ -747,8 +761,6 @@ class GameWindow:
             for image, start_pos, end_pos in self.current_animation.pieces:
                 x = start_pos[0] + (end_pos[0] - start_pos[0]) * t
                 y = start_pos[1] + (end_pos[1] - start_pos[1]) * t
-                shadow_radius = BOARD_SIZE // 16
-                pygame.draw.circle(self.screen, (0, 0, 0), (int(x) + 2, int(y) + 2), shadow_radius)
                 rect = image.get_rect(center=(int(x), int(y)))
                 self.screen.blit(image, rect)
             for image, pos in self.current_animation.captured_overlays:
