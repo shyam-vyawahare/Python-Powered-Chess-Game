@@ -9,12 +9,14 @@ class Button:
         label: str,
         callback: Callable[[], None],
         selected: bool = False,
+        icon: Optional[pygame.Surface] = None,
     ) -> None:
         self.rect = rect
         self.label = label
         self.callback = callback
         self.hover = False
         self.selected = selected
+        self.icon = icon
 
     def draw(self, surface: pygame.Surface, font: pygame.font.Font) -> None:
         if self.selected:
@@ -41,9 +43,19 @@ class Button:
         # Border
         pygame.draw.rect(surface, border_color, self.rect, 1, border_radius=6)
 
-        text = font.render(self.label, True, text_color)
-        rect = text.get_rect(center=self.rect.center)
-        surface.blit(text, rect)
+        if self.icon:
+            # Draw icon on left or center if no label
+            icon_rect = self.icon.get_rect(midleft=(self.rect.x + 10, self.rect.centery))
+            surface.blit(self.icon, icon_rect)
+            # Draw label to right of icon
+            if self.label:
+                text = font.render(self.label, True, text_color)
+                text_rect = text.get_rect(midleft=(icon_rect.right + 10, self.rect.centery))
+                surface.blit(text, text_rect)
+        else:
+            text = font.render(self.label, True, text_color)
+            rect = text.get_rect(center=self.rect.center)
+            surface.blit(text, rect)
 
     def handle_mouse_move(self, pos: Tuple[int, int]) -> None:
         self.hover = self.rect.collidepoint(pos)

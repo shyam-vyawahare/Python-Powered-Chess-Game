@@ -13,8 +13,8 @@ from .menu_handler import ButtonBar, Button
 from .dialogs import PromotionDialog, MessageOverlay, WinningDialog
 
 
-WINDOW_WIDTH = 1000
-WINDOW_HEIGHT = 800
+WINDOW_WIDTH = 1024
+WINDOW_HEIGHT = 720
 PANEL_BG = (30, 30, 30)
 TEXT_COLOR = (230, 230, 230)
 
@@ -106,7 +106,7 @@ class GameWindow:
         self.clock = pygame.time.Clock()
         self.running = True
         self.game = Game()
-        self.board_renderer = BoardRenderer((40, 40))
+        self.board_renderer = BoardRenderer((40, (WINDOW_HEIGHT - BOARD_SIZE) // 2))
         self.side_font = pygame.font.SysFont("arial", 18)
         self.title_font = pygame.font.SysFont("arial", 48, bold=True)
         self.small_font = pygame.font.SysFont("arial", 14)
@@ -120,7 +120,7 @@ class GameWindow:
         pieces_dir = base_dir / "assets" / "pieces" / "classic"
         self.board_renderer.piece_images.load(pieces_dir)
         self.board_renderer.piece_images.set_mode_images()
-
+        
         # Load background
         bg_path = base_dir / "assets" / "game-bg.jpg"
         if bg_path.exists():
@@ -129,17 +129,18 @@ class GameWindow:
         else:
             self.background_surface = self._create_background()
 
+        # Button bar below board
+        button_y = (WINDOW_HEIGHT + BOARD_SIZE) // 2 + 10
         self.button_bar = ButtonBar(
-            pygame.Rect(40, BOARD_SIZE + 60, 360, 40),
+            pygame.Rect(40, button_y, 360, 40),
         )
         self.button_bar.add_button("New Game", self.new_game)
         self.button_bar.add_button("Undo", self.undo_move)
         self.button_bar.add_button("Hint", self.hint)
         self.button_bar.add_button("Settings", self.menu_settings)
-        # Main Menu button moved to separate location
         
         self.btn_main_menu = Button(
-            pygame.Rect(WINDOW_WIDTH - 140, BOARD_SIZE + 60, 120, 40),
+            pygame.Rect(WINDOW_WIDTH - 160, button_y, 120, 40),
             "Main Menu",
             self.return_to_menu
         )
@@ -252,11 +253,35 @@ class GameWindow:
         if self.settings_tab == "Pieces":
             # Piece Style
             mode = self.board_renderer.piece_images.mode
-            # Radio buttons
-            self.settings_buttons.append(Button(pygame.Rect(content_x, content_y, 140, 40), "Classic", 
-                lambda: self.set_piece_mode("images"), selected=(mode=="images")))
-            self.settings_buttons.append(Button(pygame.Rect(content_x + 150, content_y, 140, 40), "Letters", 
-                lambda: self.set_piece_mode("letters"), selected=(mode=="letters")))
+            
+            # Icons
+            classic_icon = self.board_renderer.piece_images.images.get("white_knight")
+            
+            # Letters: "K" Surface
+            letter_icon = pygame.Surface((40, 40), pygame.SRCALPHA)
+            k_font = pygame.font.SysFont("serif", 32, bold=True)
+            k_text = k_font.render("K", True, (255, 255, 255))
+            if k_text:
+                letter_icon.blit(k_text, k_text.get_rect(center=(20, 20)))
+            
+            # Vertical layout
+            btn_h = 50
+            
+            self.settings_buttons.append(Button(
+                pygame.Rect(content_x, content_y, 200, btn_h), 
+                "Classic", 
+                lambda: self.set_piece_mode("images"), 
+                selected=(mode=="images"),
+                icon=classic_icon
+            ))
+            
+            self.settings_buttons.append(Button(
+                pygame.Rect(content_x, content_y + btn_h + 10, 200, btn_h), 
+                "Letters", 
+                lambda: self.set_piece_mode("letters"), 
+                selected=(mode=="letters"),
+                icon=letter_icon
+            ))
                 
         elif self.settings_tab == "Board":
             # Themes
@@ -416,9 +441,24 @@ class GameWindow:
         self.running = False
 
     def undo_move(self) -> None:
+        if self.ai_thread is not None and self.ai_thread.is_alive():
+            self.message_overlay.show("Cannot undo while AI is thinking", frames=120)
+            return
+        if self.current_animation is not None:
+            return
+            
         if self.game.undo_last_move():
             self.interaction = InteractionState()
             self.message_overlay.show("Move undone", frames=120)
+            # If playing vs AI and it was AI's turn (now Human's), we might want to undo again?
+            # Standard behavior: Undo takes back one half-move.
+            # But if AI just moved, we are now at AI's turn. 
+            # If we want to fix the "crash" caused by pending AI moves, we should clear the queue.
+            while not self.ai_move_queue.empty():
+                try:
+                    self.ai_move_queue.get_nowait()
+                except queue.Empty:
+                    pass
         else:
             self.message_overlay.show("No moves to undo", frames=120)
 
@@ -590,8 +630,18 @@ class GameWindow:
         self.ai_thread.start()
 
     def draw_side_panel(self) -> None:
-        panel_rect = pygame.Rect(BOARD_SIZE + 40, 20, WINDOW_WIDTH - BOARD_SIZE - 60, BOARD_SIZE - 40)
-        pygame.draw.rect(self.screen, PANEL_BG, panel_rect)
+        # Align panel with the board
+        board_y = (WINDOW_HEIGHT - BOARD_SIZE) // 2
+        panel_x = BOARD_SIZE + 80
+        panel_width = WINDOW_WIDTH - panel_x - 40
+        panel_rect = pygame.Rect(panel_x, board_y, panel_width, BOARD_SIZE)
+        
+        # Transparent background for panel
+        s = pygame.Surface((panel_rect.width, panel_rect.height))
+        s.set_alpha(200)
+        s.fill((0, 0, 0))
+        self.screen.blit(s, (panel_rect.x, panel_rect.y))
+        
         turn = "White" if self.game.board.current_player is Color.WHITE else "Black"
         status = "Active"
         if self.game.result:

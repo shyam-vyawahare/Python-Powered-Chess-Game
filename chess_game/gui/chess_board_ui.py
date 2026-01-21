@@ -6,7 +6,7 @@ from ..utils import Color, Move
 from ..board import Board
 
 
-BOARD_SIZE = 560
+BOARD_SIZE = 600
 SQUARE_SIZE = BOARD_SIZE // 8
 LIGHT_SQUARE = (240, 217, 181)
 DARK_SQUARE = (181, 136, 99)
