@@ -6,7 +6,7 @@ from ..utils import Color, Move
 from ..board import Board
 
 
-BOARD_SIZE = 640
+BOARD_SIZE = 560
 SQUARE_SIZE = BOARD_SIZE // 8
 LIGHT_SQUARE = (240, 217, 181)
 DARK_SQUARE = (181, 136, 99)
@@ -14,7 +14,7 @@ HIGHLIGHT_MOVE = (186, 202, 68)
 HIGHLIGHT_SELECTED = (246, 246, 105)
 HIGHLIGHT_LAST_MOVE = (205, 210, 106)
 HIGHLIGHT_INVALID = (220, 50, 50)
-LABEL_COLOR = (30, 30, 30)
+LABEL_COLOR = (200, 200, 200)
 
 
 class PieceImages:
@@ -96,10 +96,11 @@ class BoardRenderer:
         self.piece_images = PieceImages()
         self.hover_square: Optional[Tuple[int, int]] = None
         self.invalid_flash_frames = 0
+        self.orientation: Color = Color.WHITE
         
         # Theme support
         self.themes = {
-            "Classic": ((240, 217, 181), (181, 136, 99)),
+            "Brown": ((240, 217, 181), (181, 136, 99)),
             "Blue": ((232, 235, 239), (125, 135, 150)),
             "Green": ((238, 238, 210), (118, 150, 86)),
             "B&W": ((240, 240, 240), (50, 50, 50)),
@@ -121,11 +122,20 @@ class BoardRenderer:
             return None
         col = x_rel // SQUARE_SIZE
         row = y_rel // SQUARE_SIZE
+        if self.orientation == Color.BLACK:
+            col = 7 - col
+            row = 7 - row
         return int(row), int(col)
 
     def square_to_rect(self, row: int, col: int) -> pygame.Rect:
-        x = self.offset_x + col * SQUARE_SIZE
-        y = self.offset_y + row * SQUARE_SIZE
+        if self.orientation == Color.BLACK:
+            draw_col = 7 - col
+            draw_row = 7 - row
+        else:
+            draw_col = col
+            draw_row = row
+        x = self.offset_x + draw_col * SQUARE_SIZE
+        y = self.offset_y + draw_row * SQUARE_SIZE
         return pygame.Rect(x, y, SQUARE_SIZE, SQUARE_SIZE)
 
     def update_hover(self, mouse_pos: Tuple[int, int]) -> None:
@@ -144,6 +154,7 @@ class BoardRenderer:
         hint_move: Optional[Move],
         hide_pieces: Set[Tuple[int, int]],
         king_in_check: Optional[Tuple[int, int]],
+        highlight_check: bool = False,
     ) -> None:
         # Flash removed as per request
         if self.invalid_flash_frames > 0:
@@ -170,8 +181,8 @@ class BoardRenderer:
             rect = self.square_to_rect(*selected)
             pygame.draw.rect(surface, HIGHLIGHT_SELECTED, rect, 0)
         for row, col in moves_from_selected:
-            center_x = self.offset_x + col * SQUARE_SIZE + SQUARE_SIZE // 2
-            center_y = self.offset_y + row * SQUARE_SIZE + SQUARE_SIZE // 2
+            rect = self.square_to_rect(row, col)
+            center_x, center_y = rect.center
             radius = SQUARE_SIZE // 8
             pygame.draw.circle(surface, HIGHLIGHT_MOVE, (center_x, center_y), radius)
         for row in range(8):
@@ -187,7 +198,7 @@ class BoardRenderer:
                     center = rect.center
                     img_rect = image.get_rect(center=center)
                     surface.blit(image, img_rect)
-        if king_in_check is not None:
+        if king_in_check is not None and highlight_check:
             rect = self.square_to_rect(king_in_check[0], king_in_check[1])
             pygame.draw.rect(surface, (200, 50, 50), rect, 3)
         self.draw_labels(surface)
@@ -195,6 +206,12 @@ class BoardRenderer:
     def draw_labels(self, surface: pygame.Surface) -> None:
         font = pygame.font.SysFont("arial", 14)
         files = "abcdefgh"
+        if self.orientation == Color.BLACK:
+            files = files[::-1]
+            ranks = [str(i+1) for i in range(8)]
+        else:
+            ranks = [str(8-i) for i in range(8)]
+
         for col in range(8):
             label = font.render(files[col], True, LABEL_COLOR)
             x = self.offset_x + col * SQUARE_SIZE + SQUARE_SIZE // 2
@@ -202,7 +219,7 @@ class BoardRenderer:
             rect = label.get_rect(center=(x, y))
             surface.blit(label, rect)
         for row in range(8):
-            label = font.render(str(8 - row), True, LABEL_COLOR)
+            label = font.render(ranks[row], True, LABEL_COLOR)
             x = self.offset_x - 10
             y = self.offset_y + row * SQUARE_SIZE + SQUARE_SIZE // 2
             rect = label.get_rect(center=(x, y))

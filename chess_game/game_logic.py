@@ -564,12 +564,21 @@ class Game:
     def undo_last_move(self) -> bool:
         if len(self.history) <= 1:
             return False
+        
+        # Decrement repetition counter for the current board state before popping
+        current_fen = self.board.to_fen_part()
+        if current_fen in self.repetition:
+            self.repetition[current_fen] -= 1
+            if self.repetition[current_fen] <= 0:
+                del self.repetition[current_fen]
+
         self.history.pop()
         self.board = self.history[-1].copy()
         if self.move_log:
             self.move_log.pop()
         self.result = None
         self.last_move = None
+        self.draw_offered_by = None
         return True
 
 

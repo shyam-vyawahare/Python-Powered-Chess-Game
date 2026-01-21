@@ -24,6 +24,10 @@ class InteractionState:
         self.pending_promotion_moves: List[Move] = []
         self.hint_move: Optional[Move] = None
         self.awaiting_promotion = False
+        self.dragging = False
+        self.drag_start_pos: Optional[Tuple[int, int]] = None
+        self.drag_offset: Tuple[int, int] = (0, 0)
+        self.drag_piece: Optional[Piece] = None
 
 
 class MoveAnimation:
@@ -100,7 +104,7 @@ class GameWindow:
         self.clock = pygame.time.Clock()
         self.running = True
         self.game = Game()
-        self.board_renderer = BoardRenderer((40, 20))
+        self.board_renderer = BoardRenderer((40, 40))
         self.side_font = pygame.font.SysFont("arial", 18)
         self.title_font = pygame.font.SysFont("arial", 48, bold=True)
         self.small_font = pygame.font.SysFont("arial", 14)
@@ -115,7 +119,7 @@ class GameWindow:
         self.board_renderer.piece_images.load(pieces_dir)
         self.board_renderer.piece_images.set_mode_images()
         self.button_bar = ButtonBar(
-            pygame.Rect(BOARD_SIZE + 40, WINDOW_HEIGHT - 60, 260, 50),
+            pygame.Rect(40, BOARD_SIZE + 60, 360, 40),
         )
         self.button_bar.add_button("New Game", self.new_game)
         self.button_bar.add_button("Undo", self.undo_move)
@@ -124,7 +128,7 @@ class GameWindow:
         # Main Menu button moved to separate location
         
         self.btn_main_menu = Button(
-            pygame.Rect(40, WINDOW_HEIGHT - 60, 120, 40),
+            pygame.Rect(WINDOW_WIDTH - 140, BOARD_SIZE + 60, 120, 40),
             "Main Menu",
             self.return_to_menu
         )
@@ -144,7 +148,8 @@ class GameWindow:
         self.settings = {
             "theme": "Green",
             "sound_move": True,
-            "sound_capture": True
+            "sound_capture": True,
+            "highlight_check": False
         }
         self.menu_buttons: List[Button] = []
         self.difficulty_buttons: List[Button] = []
@@ -230,7 +235,9 @@ class GameWindow:
         
         # Theme
         curr_theme = self.settings["theme"]
-        themes = [("Classic", 80, "Classic"), ("Blue", 60, "Blue"), ("Green", 70, "Green"), ("B&W", 60, "B&W")]
+        if curr_theme == "Classic":  # Migration
+            curr_theme = "Brown"
+        themes = [("Brown", 80, "Brown"), ("Blue", 60, "Blue"), ("Green", 70, "Green"), ("B&W", 60, "B&W")]
         add_row(start_y + 60, themes, curr_theme, lambda v: (lambda: self.set_theme_mode(v)))
         
         # Sound
@@ -238,8 +245,17 @@ class GameWindow:
         add_row(start_y + 120, [("Sound On", 100, True), ("Sound Off", 100, False)], snd, 
                 lambda v: (lambda: self.set_sound_mode(v)))
 
+        # Highlight Check
+        chk = self.settings["highlight_check"]
+        add_row(start_y + 180, [("Show Check", 110, True), ("Hide Check", 110, False)], chk,
+                lambda v: (lambda: self.set_highlight_check(v)))
+
         # Back
-        self.settings_buttons.append(Button(pygame.Rect(center_x - 100, start_y + 200, 200, 40), "Back", self.menu_back_to_main))
+        self.settings_buttons.append(Button(pygame.Rect(center_x - 100, start_y + 240, 200, 40), "Back", self.menu_back_to_main))
+
+    def set_highlight_check(self, enabled: bool) -> None:
+        self.settings["highlight_check"] = enabled
+        self.update_settings_buttons()
 
     def set_piece_mode(self, mode: str) -> None:
         if mode == "images":
@@ -290,6 +306,7 @@ class GameWindow:
 
     def menu_two_players(self) -> None:
         self.mode_human_vs_ai = False
+        self.board_renderer.orientation = Color.WHITE
         self.new_game()
         self.state = "playing"
 
@@ -316,6 +333,7 @@ class GameWindow:
         else:
             self.human_color = color
         self.ai_color = self.human_color.opposite
+        self.board_renderer.orientation = self.human_color
         self.new_game()
         self.state = "playing"
         # If AI is white, trigger first move
@@ -423,56 +441,62 @@ class GameWindow:
         piece = board.get_piece(row, col)
         if self.interaction.awaiting_promotion:
             return
-        if self.interaction.selected is None:
-            if piece is None or piece.color is not board.current_player:
-                self.board_renderer.trigger_invalid_flash()
-                return
-            self.interaction.selected = (row, col)
-            self.interaction.moves_from_selected = self.compute_moves_from(row, col)
-            self.interaction.hint_move = None
-            return
-        if self.interaction.selected == (row, col):
-            self.interaction.selected = None
-            self.interaction.moves_from_selected.clear()
-            return
+        
+        # Logic update for Drag & Drop and Deselect
+        # If we clicked (MOUSEBUTTONDOWN), we might be starting a drag or selecting.
+        
+        # 1. If we click on our own piece, select it (and start drag logic elsewhere)
         if piece is not None and piece.color is board.current_player:
             self.interaction.selected = (row, col)
             self.interaction.moves_from_selected = self.compute_moves_from(row, col)
             self.interaction.hint_move = None
             return
-        targets = self.interaction.moves_from_selected
-        if (row, col) not in targets:
-            self.board_renderer.trigger_invalid_flash()
+
+        # 2. If we have a selection, try to move to the clicked square
+        if self.interaction.selected is not None:
+            targets = self.interaction.moves_from_selected
+            if (row, col) in targets:
+                moves = [
+                    m
+                    for m in self.game.get_legal_moves()
+                    if m.from_row == self.interaction.selected[0]
+                    and m.from_col == self.interaction.selected[1]
+                    and m.to_row == row
+                    and m.to_col == col
+                ]
+                if not moves:
+                    self.board_renderer.trigger_invalid_flash()
+                    return
+                promotion_moves = [m for m in moves if m.promotion is not None]
+                if promotion_moves:
+                    self.interaction.pending_promotion_moves = promotion_moves
+                    self.interaction.awaiting_promotion = True
+                    rect = pygame.Rect(
+                        80,
+                        WINDOW_HEIGHT // 2 - 30,
+                        WINDOW_WIDTH - 160,
+                        60,
+                    )
+                    dialog = PromotionDialog(rect, self.handle_promotion_choice)
+                    dialog.layout()
+                    self.promotion_dialog = dialog
+                    return
+                move = moves[0]
+                self.apply_move_and_maybe_ai(move)
+                self.interaction.selected = None
+                self.interaction.moves_from_selected.clear()
+                return
+            
+            # 3. If clicking empty square or enemy piece that is NOT a valid move target -> Deselect
+            # (If it was own piece, it was handled in #1)
+            self.interaction.selected = None
+            self.interaction.moves_from_selected.clear()
             return
-        moves = [
-            m
-            for m in self.game.get_legal_moves()
-            if m.from_row == self.interaction.selected[0]
-            and m.from_col == self.interaction.selected[1]
-            and m.to_row == row
-            and m.to_col == col
-        ]
-        if not moves:
-            self.board_renderer.trigger_invalid_flash()
-            return
-        promotion_moves = [m for m in moves if m.promotion is not None]
-        if promotion_moves:
-            self.interaction.pending_promotion_moves = promotion_moves
-            self.interaction.awaiting_promotion = True
-            rect = pygame.Rect(
-                80,
-                WINDOW_HEIGHT // 2 - 30,
-                WINDOW_WIDTH - 160,
-                60,
-            )
-            dialog = PromotionDialog(rect, self.handle_promotion_choice)
-            dialog.layout()
-            self.promotion_dialog = dialog
-            return
-        move = moves[0]
-        self.apply_move_and_maybe_ai(move)
-        self.interaction.selected = None
-        self.interaction.moves_from_selected.clear()
+
+        # 4. If no selection and clicked empty/enemy -> Invalid flash (or just ignore)
+        # User requested: "Invalid actions should ... simply not allow the move ... No visual punishment"
+        # So we just ignore.
+        pass
 
     def handle_promotion_choice(self, choice: str) -> None:
         moves = [
@@ -568,36 +592,41 @@ class GameWindow:
             y += 24
             
         y += 10
-        text = self.side_font.render("Captured White:", True, TEXT_COLOR)
-        self.screen.blit(text, (panel_rect.x + 10, y))
-        y += 22
-        x = panel_rect.x + 10
-        for piece in self.game.captured_white:
-            image = self.board_renderer.piece_images.get(piece)
-            if image is not None:
-                small = pygame.transform.smoothscale(
-                    image,
-                    (SQUARE_SIZE // 3, SQUARE_SIZE // 3),
-                )
-                rect_img = small.get_rect(topleft=(x, y))
-                self.screen.blit(small, rect_img)
-                x += 20
-        y += 35
-        text = self.side_font.render("Captured Black:", True, TEXT_COLOR)
-        self.screen.blit(text, (panel_rect.x + 10, y))
-        y += 22
-        x = panel_rect.x + 10
-        for piece in self.game.captured_black:
-            image = self.board_renderer.piece_images.get(piece)
-            if image is not None:
-                small = pygame.transform.smoothscale(
-                    image,
-                    (SQUARE_SIZE // 3, SQUARE_SIZE // 3),
-                )
-                rect_img = small.get_rect(topleft=(x, y))
-                self.screen.blit(small, rect_img)
-                x += 20
-        y += 32
+        
+        # Captured pieces helper
+        def draw_captured(label, pieces, start_y):
+            lbl = self.side_font.render(label, True, TEXT_COLOR)
+            self.screen.blit(lbl, (panel_rect.x + 10, start_y))
+            start_y += 22
+            
+            if not pieces:
+                return start_y + 35
+            
+            icon_size = SQUARE_SIZE // 3
+            available_width = panel_rect.width - 20
+            count = len(pieces)
+            step = 20 # default spacing
+            
+            required_width = (count - 1) * step + icon_size
+            if required_width > available_width and count > 1:
+                step = (available_width - icon_size) / (count - 1)
+            
+            start_x = panel_rect.x + 10
+            for i, piece in enumerate(pieces):
+                image = self.board_renderer.piece_images.get(piece)
+                if image is not None:
+                    small = pygame.transform.smoothscale(
+                        image,
+                        (icon_size, icon_size),
+                    )
+                    rect_img = small.get_rect(topleft=(int(start_x + i * step), start_y))
+                    self.screen.blit(small, rect_img)
+            return start_y + 35
+
+        y = draw_captured("Captured White:", self.game.captured_white, y)
+        y = draw_captured("Captured Black:", self.game.captured_black, y)
+        
+        y += 10
         text = self.side_font.render("Moves:", True, TEXT_COLOR)
         self.screen.blit(text, (panel_rect.x + 10, y))
         y += 22
@@ -644,6 +673,9 @@ class GameWindow:
                     self.board_renderer.update_hover(pos)
                     self.button_bar.handle_mouse_move(pos)
                     self.btn_main_menu.handle_mouse_move(pos)
+                    # Dragging logic
+                    if self.interaction.dragging and self.interaction.selected:
+                        pass # Just trigger redraw
                 elif self.state == "menu":
                     for b in self.menu_buttons:
                         b.handle_mouse_move(pos)
@@ -664,6 +696,14 @@ class GameWindow:
                             continue
                     if self.board_renderer.board_rect().collidepoint(pos):
                         self.handle_board_click(pos)
+                        # Start Drag
+                        if self.interaction.selected:
+                            sq = self.board_renderer.pixel_to_square(*pos)
+                            if sq == self.interaction.selected:
+                                self.interaction.dragging = True
+                                self.interaction.drag_start_pos = pos
+                                r, c = sq
+                                self.interaction.drag_piece = self.game.board.get_piece(r, c)
                     else:
                         self.button_bar.handle_mouse_down(pos)
                         self.btn_main_menu.handle_mouse_down(pos)
@@ -679,6 +719,22 @@ class GameWindow:
                 elif self.state == "color_selection":
                     for b in self.color_buttons:
                         b.handle_mouse_down(pos)
+            elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                if self.state == "playing" and self.interaction.dragging:
+                    pos = event.pos
+                    self.interaction.dragging = False
+                    self.interaction.drag_piece = None
+                    
+                    # Try to complete move
+                    square = self.board_renderer.pixel_to_square(*pos)
+                    if square and self.interaction.selected:
+                        r, c = square
+                        # If released on same square, do nothing (keep selected)
+                        if (r, c) == self.interaction.selected:
+                            continue
+                        
+                        # Try to move
+                        self.handle_board_click(pos)
 
     def draw(self) -> None:
         if self.state in ["menu", "difficulty", "settings", "color_selection"]:
@@ -740,6 +796,10 @@ class GameWindow:
             move = self.current_animation.move
             hide_pieces.add((move.from_row, move.from_col))
             hide_pieces.add((move.to_row, move.to_col))
+        
+        if self.interaction.dragging and self.interaction.selected:
+            hide_pieces.add(self.interaction.selected)
+
         self.board_renderer.draw_board(
             self.screen,
             self.game.board,
@@ -749,7 +809,17 @@ class GameWindow:
             self.interaction.hint_move,
             hide_pieces,
             king_pos,
+            highlight_check=self.settings["highlight_check"]
         )
+        
+        # Draw dragged piece
+        if self.interaction.dragging and self.interaction.drag_piece:
+            image = self.board_renderer.piece_images.get(self.interaction.drag_piece)
+            if image:
+                mouse_pos = pygame.mouse.get_pos()
+                rect = image.get_rect(center=mouse_pos)
+                self.screen.blit(image, rect)
+
         self.draw_side_panel()
         self.button_bar.draw(self.screen, self.button_font)
         self.btn_main_menu.draw(self.screen, self.button_font)
