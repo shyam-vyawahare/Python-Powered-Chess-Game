@@ -24,38 +24,47 @@ class Button:
             text_color = (255, 255, 255)
             border_color = (255, 255, 255)
         elif self.hover:
-            color = (100, 100, 100)
+            color = (90, 90, 90)
             text_color = (255, 255, 255)
-            border_color = (200, 200, 200)
+            border_color = (180, 180, 180)
         else:
-            color = (70, 70, 70)
+            color = (60, 60, 60)
             text_color = (220, 220, 220)
-            border_color = (120, 120, 120)
+            border_color = (100, 100, 100)
 
         # Shadow
         shadow_rect = self.rect.copy()
-        shadow_rect.y += 2
-        pygame.draw.rect(surface, (30, 30, 30), shadow_rect, border_radius=6)
+        shadow_rect.y += 3
+        pygame.draw.rect(surface, (20, 20, 20), shadow_rect, border_radius=8)
 
         # Main Body
-        pygame.draw.rect(surface, color, self.rect, border_radius=6)
+        pygame.draw.rect(surface, color, self.rect, border_radius=8)
         
         # Border
-        pygame.draw.rect(surface, border_color, self.rect, 1, border_radius=6)
+        pygame.draw.rect(surface, border_color, self.rect, 2 if self.selected else 1, border_radius=8)
 
         if self.icon:
             # Draw icon on left or center if no label
-            icon_rect = self.icon.get_rect(midleft=(self.rect.x + 10, self.rect.centery))
+            icon_rect = self.icon.get_rect(midleft=(self.rect.x + 12, self.rect.centery))
             surface.blit(self.icon, icon_rect)
             # Draw label to right of icon
             if self.label:
                 text = font.render(self.label, True, text_color)
-                text_rect = text.get_rect(midleft=(icon_rect.right + 10, self.rect.centery))
+                # Center text in remaining space
+                remaining_w = self.rect.width - (icon_rect.right - self.rect.x)
+                center_x = icon_rect.right + remaining_w // 2
+                text_rect = text.get_rect(center=(center_x, self.rect.centery))
                 surface.blit(text, text_rect)
         else:
             text = font.render(self.label, True, text_color)
             rect = text.get_rect(center=self.rect.center)
             surface.blit(text, rect)
+            
+        # Hover glow effect (subtle)
+        if self.hover and not self.selected:
+             glow = pygame.Surface((self.rect.width, self.rect.height), pygame.SRCALPHA)
+             pygame.draw.rect(glow, (255, 255, 255, 30), glow.get_rect(), border_radius=8)
+             surface.blit(glow, self.rect)
 
     def handle_mouse_move(self, pos: Tuple[int, int]) -> None:
         self.hover = self.rect.collidepoint(pos)

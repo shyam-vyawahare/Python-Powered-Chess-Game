@@ -256,13 +256,15 @@ class GameWindow:
             
             # Icons
             classic_icon = self.board_renderer.piece_images.images.get("white_knight")
+            if classic_icon:
+                classic_icon = pygame.transform.smoothscale(classic_icon, (32, 32))
             
             # Letters: "K" Surface
-            letter_icon = pygame.Surface((40, 40), pygame.SRCALPHA)
-            k_font = pygame.font.SysFont("serif", 32, bold=True)
+            letter_icon = pygame.Surface((32, 32), pygame.SRCALPHA)
+            k_font = pygame.font.SysFont("serif", 28, bold=True)
             k_text = k_font.render("K", True, (255, 255, 255))
             if k_text:
-                letter_icon.blit(k_text, k_text.get_rect(center=(20, 20)))
+                letter_icon.blit(k_text, k_text.get_rect(center=(16, 16)))
             
             # Vertical layout
             btn_h = 50
@@ -367,11 +369,16 @@ class GameWindow:
         self.state = "playing"
 
     def menu_settings(self) -> None:
+        self.last_state = self.state
         self.state = "settings"
         self.update_settings_buttons()
 
     def menu_back_to_main(self) -> None:
-        self.state = "menu"
+        if hasattr(self, 'last_state') and self.last_state == "playing":
+            self.state = "playing"
+            self.update_settings_buttons() # Cleanup if needed
+        else:
+            self.state = "menu"
         
     def menu_back_to_difficulty(self) -> None:
         self.state = "difficulty"
@@ -447,13 +454,26 @@ class GameWindow:
         if self.current_animation is not None:
             return
             
-        if self.game.undo_last_move():
+        # Single Player Logic: Undo both AI and Human move if it is Human's turn
+        undo_count = 1
+        if self.mode_human_vs_ai and self.game.board.current_player == self.human_color:
+             # It is human's turn, so AI must have moved last.
+             # We want to undo AI's move AND Human's previous move to let Human retry.
+             if len(self.game.history) >= 2:
+                 undo_count = 2
+        
+        success = False
+        for _ in range(undo_count):
+            if self.game.undo_last_move():
+                success = True
+            else:
+                break
+        
+        if success:
             self.interaction = InteractionState()
             self.message_overlay.show("Move undone", frames=120)
-            # If playing vs AI and it was AI's turn (now Human's), we might want to undo again?
-            # Standard behavior: Undo takes back one half-move.
-            # But if AI just moved, we are now at AI's turn. 
-            # If we want to fix the "crash" caused by pending AI moves, we should clear the queue.
+            
+            # Clear any pending AI moves in queue to prevent ghost moves
             while not self.ai_move_queue.empty():
                 try:
                     self.ai_move_queue.get_nowait()
