@@ -480,19 +480,49 @@ def material_balance(board: Board, color: Color) -> int:
     return score
 
 
+from dataclasses import dataclass
+
+@dataclass
+class GameSnapshot:
+    board: Board
+    captured_white: List[Piece]
+    captured_black: List[Piece]
+    move_log: List[str]
+    repetition: Dict[str, int]
+    last_move: Optional[Move]
+    result: Optional[str]
+
 class Game:
     def __init__(self) -> None:
         self.board = Board()
         self.board.setup_initial()
-        self.history: List[Board] = [self.board.copy()]
-        self.move_log: List[str] = []
+        
+        # State tracking
         self.captured_white: List[Piece] = []
         self.captured_black: List[Piece] = []
+        self.move_log: List[str] = []
         self.repetition: Dict[str, int] = {}
-        self.draw_offered_by: Optional[Color] = None
-        self.result: Optional[str] = None
-        self._update_repetition()
         self.last_move: Optional[Move] = None
+        self.result: Optional[str] = None
+        self.draw_offered_by: Optional[Color] = None
+        
+        self._update_repetition()
+        
+        # Initialize history with the starting state
+        self.history: List[GameSnapshot] = []
+        self._push_snapshot()
+
+    def _push_snapshot(self) -> None:
+        snapshot = GameSnapshot(
+            board=self.board.copy(),
+            captured_white=list(self.captured_white),  # Shallow copy of list is enough if Pieces are immutable-ish or not modified
+            captured_black=list(self.captured_black),
+            move_log=list(self.move_log),
+            repetition=self.repetition.copy(),
+            last_move=self.last_move,
+            result=self.result
+        )
+        self.history.append(snapshot)
 
     def _update_repetition(self) -> None:
         key = self.board.board_key()
@@ -531,7 +561,6 @@ class Game:
         notation = get_algebraic_notation(self.board, move)
         
         captured = make_move(self.board, move)
-        self.history.append(self.board.copy())
         if captured is not None:
             if captured.color is Color.WHITE:
                 self.captured_white.append(captured)
@@ -543,6 +572,9 @@ class Game:
         self.last_move = move
         self.update_result_after_move()
         self.draw_offered_by = None
+        
+        # Save state AFTER move
+        self._push_snapshot()
         return True
 
     def update_result_after_move(self) -> None:
@@ -565,20 +597,21 @@ class Game:
         if len(self.history) <= 1:
             return False
         
-        # Decrement repetition counter for the current board state before popping
-        current_fen = self.board.to_fen_part()
-        if current_fen in self.repetition:
-            self.repetition[current_fen] -= 1
-            if self.repetition[current_fen] <= 0:
-                del self.repetition[current_fen]
-
+        # Pop current state (which is the state after the move we want to undo)
         self.history.pop()
-        self.board = self.history[-1].copy()
-        if self.move_log:
-            self.move_log.pop()
-        self.result = None
-        self.last_move = None
+        
+        # Restore previous state (state before the move)
+        previous_snapshot = self.history[-1]
+        
+        self.board = previous_snapshot.board.copy()
+        self.captured_white = list(previous_snapshot.captured_white)
+        self.captured_black = list(previous_snapshot.captured_black)
+        self.move_log = list(previous_snapshot.move_log)
+        self.repetition = previous_snapshot.repetition.copy()
+        self.last_move = previous_snapshot.last_move
+        self.result = previous_snapshot.result
         self.draw_offered_by = None
+        
         return True
 
 
