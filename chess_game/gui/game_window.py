@@ -1,9 +1,10 @@
-from typing import Optional, Set, Tuple, List
+from typing import Optional, Set, Tuple, List, Dict
 from pathlib import Path
 import pygame
 import random
 import threading
 import queue
+import os
 from ..game_logic import Game
 from ..ai_opponent import choose_ai_move, AI_SETTINGS
 from ..utils import Color, Move, indices_to_square
@@ -115,19 +116,88 @@ class GameWindow:
         self.message_overlay = MessageOverlay(
             pygame.Rect(0, WINDOW_HEIGHT - 40, WINDOW_WIDTH, 30),
         )
-        # Assets are located in chess_game/gui/assets/pieces
-        base_dir = Path(__file__).resolve().parent
-        pieces_dir = base_dir / "assets" / "pieces" / "classic"
-        self.board_renderer.piece_images.load(pieces_dir)
+        
+        # Asset Paths
+        self.base_dir = Path(__file__).resolve().parent
+        self.assets_dir = self.base_dir / "assets"
+        self.pieces_dir = self.assets_dir / "pieces"
+        self.bg_dir = self.assets_dir / "background"
+        self.sounds_dir = self.assets_dir / "sounds"
+        
+        # Load Sounds
+        # Initialize mixer explicitly
+        try:
+            pygame.mixer.init()
+        except Exception:
+            pass
+            
+        self.sounds: Dict[str, pygame.mixer.Sound] = {}
+        if self.sounds_dir.exists():
+            sound_files = {
+                "move-self": "move-self.mp3",
+                "move-check": "move-check.mp3",
+                "capture": "capture.mp3",
+                "castle": "castle.mp3",
+                "promote": "promote.mp3"
+            }
+            for key, filename in sound_files.items():
+                path = self.sounds_dir / filename
+                if path.exists():
+                    try:
+                        self.sounds[key] = pygame.mixer.Sound(str(path))
+                    except Exception:
+                        pass
+
+        # Load Logo
+        self.logo_image = None
+        logo_path = self.assets_dir / "Cheerss.png"
+        if logo_path.exists():
+            try:
+                img = pygame.image.load(str(logo_path)).convert_alpha()
+                # Scale proportionally to reasonable width (e.g. 500px)
+                w = img.get_width()
+                h = img.get_height()
+                target_w = 500
+                target_h = int(h * (target_w / w))
+                self.logo_image = pygame.transform.smoothscale(img, (target_w, target_h))
+            except Exception:
+                pass
+
+        # Load Piece Sets
+        self.available_piece_sets = []
+        if self.pieces_dir.exists():
+            for item in self.pieces_dir.iterdir():
+                if item.is_dir() and item.name != "sounds":
+                    self.available_piece_sets.append(item.name)
+        if "classic" not in self.available_piece_sets:
+            self.available_piece_sets.append("classic")
+        self.current_piece_set = "classic"
+
+        # Initialize Pieces
+        self.board_renderer.piece_images.load(self.pieces_dir / self.current_piece_set)
         self.board_renderer.piece_images.set_mode_images()
         
-        # Load background
-        bg_path = base_dir / "assets" / "game-bg.jpg"
-        if bg_path.exists():
-            self.background_surface = pygame.image.load(bg_path)
-            self.background_surface = pygame.transform.smoothscale(self.background_surface, (WINDOW_WIDTH, WINDOW_HEIGHT))
+        # Load Backgrounds
+        self.available_backgrounds = []
+        if self.bg_dir.exists():
+            for item in self.bg_dir.iterdir():
+                if item.suffix.lower() in ['.jpg', '.png', '.jpeg']:
+                    self.available_backgrounds.append(item)
+        
+        # Load Initial Background (Prefer Classic)
+        self.background_surface = None
+        classic_bg = None
+        for bg in self.available_backgrounds:
+            if "classic" in bg.name.lower():
+                classic_bg = bg
+                break
+                
+        if classic_bg:
+             self.load_background(classic_bg)
+        elif self.available_backgrounds:
+             self.load_background(self.available_backgrounds[0])
         else:
-            self.background_surface = self._create_background()
+             self.background_surface = self._create_background()
 
         # Button bar below board
         button_y = (WINDOW_HEIGHT + BOARD_SIZE) // 2 + 10
@@ -226,6 +296,31 @@ class GameWindow:
         # Simpler: Recreate buttons when entering settings or updating them.
         pass
 
+    def load_background(self, path: Path) -> None:
+        try:
+            img = pygame.image.load(str(path)).convert()
+            self.background_surface = pygame.transform.smoothscale(img, (WINDOW_WIDTH, WINDOW_HEIGHT))
+            self.current_bg_path = path # Store current for UI highlighting if needed
+        except Exception:
+            pass
+
+    def play_sound(self, sound_name: str) -> None:
+        if not self.settings["sound_move"]:
+            return
+        if sound_name in self.sounds:
+            try:
+                self.sounds[sound_name].play()
+            except Exception:
+                pass
+                
+    def set_piece_set_name(self, name: str) -> None:
+        self.current_piece_set = name
+        self.board_renderer.piece_images.images.clear()
+        self.board_renderer.piece_images.load(self.pieces_dir / name)
+        # If we were in letter mode, we stay in letter mode, but images are updated in background
+        # If we were in image mode, we see new images immediately
+        self.update_settings_buttons()
+
     def update_settings_buttons(self) -> None:
         self.settings_buttons = []
         self.settings_tab_buttons = []
@@ -237,7 +332,7 @@ class GameWindow:
         start_y = 100
         
         # Tabs
-        tabs = ["Pieces", "Board", "Game"]
+        tabs = ["Pieces", "Board", "Background", "Game"]
         for i, tab in enumerate(tabs):
             rect = pygame.Rect(start_x, start_y + i * (tab_height + 10), tab_width, tab_height)
             selected = (self.settings_tab == tab)
@@ -254,47 +349,91 @@ class GameWindow:
             # Piece Style
             mode = self.board_renderer.piece_images.mode
             
-            # Icons
-            classic_icon = self.board_renderer.piece_images.images.get("white_knight")
-            if classic_icon:
-                classic_icon = pygame.transform.smoothscale(classic_icon, (32, 32))
-            
+            # 1. Letters Option
             # Letters: "K" Surface
             letter_icon = pygame.Surface((32, 32), pygame.SRCALPHA)
             k_font = pygame.font.SysFont("serif", 28, bold=True)
             k_text = k_font.render("K", True, (255, 255, 255))
             if k_text:
                 letter_icon.blit(k_text, k_text.get_rect(center=(16, 16)))
-            
-            # Vertical layout
+                
             btn_h = 50
-            
             self.settings_buttons.append(Button(
                 pygame.Rect(content_x, content_y, 200, btn_h), 
-                "Classic", 
-                lambda: self.set_piece_mode("images"), 
-                selected=(mode=="images"),
-                icon=classic_icon
-            ))
-            
-            self.settings_buttons.append(Button(
-                pygame.Rect(content_x, content_y + btn_h + 10, 200, btn_h), 
                 "Letters", 
                 lambda: self.set_piece_mode("letters"), 
                 selected=(mode=="letters"),
                 icon=letter_icon
             ))
+            
+            # 2. Image Sets
+            current_y = content_y + btn_h + 10
+            
+            for set_name in self.available_piece_sets:
+                # Load a sample icon for this set (e.g. White Knight)
+                # We need to construct the path manually to get the icon without reloading the whole set into the renderer just for the button
+                # Actually, simpler: just use the name. Or try to load one image.
+                icon = None
+                try:
+                    icon_path = self.pieces_dir / set_name / "white_knight.png"
+                    if icon_path.exists():
+                        icon = pygame.image.load(str(icon_path)).convert_alpha()
+                        icon = pygame.transform.smoothscale(icon, (32, 32))
+                except:
+                    pass
+                
+                is_selected = (mode == "images" and self.current_piece_set == set_name)
+                
+                self.settings_buttons.append(Button(
+                    pygame.Rect(content_x, current_y, 200, btn_h),
+                    set_name.replace("-", " ").title(),
+                    lambda n=set_name: [self.set_piece_set_name(n), self.set_piece_mode("images")],
+                    selected=is_selected,
+                    icon=icon
+                ))
+                current_y += btn_h + 10
                 
         elif self.settings_tab == "Board":
             # Themes
-            themes = [("Brown", (240, 217, 181)), ("Blue", (232, 235, 239)), 
-                      ("Green", (238, 238, 210)), ("B&W", (240, 240, 240))]
+            themes = list(self.board_renderer.themes.keys())
             curr_theme = self.settings["theme"]
             if curr_theme == "Classic": curr_theme = "Brown"
             
-            for i, (name, _) in enumerate(themes):
-                rect = pygame.Rect(content_x, content_y + i * 50, 140, 40)
+            # Use a list layout to avoid overlapping with preview
+            btn_w = 200
+            btn_h = 40
+            spacing = 10
+            
+            for i, name in enumerate(themes):
+                # Single column
+                x = content_x
+                y = content_y + i * (btn_h + spacing)
+                
+                # Check bounds - if too many themes, might need scrolling or 2 columns with smaller width
+                # But for now, we have about 9 themes. 9 * 50 = 450px.
+                # content_y is 100. 100 + 450 = 550. WINDOW_HEIGHT is 720. Fits.
+                
+                rect = pygame.Rect(x, y, btn_w, btn_h)
                 self.settings_buttons.append(Button(rect, name, lambda n=name: self.set_theme_mode(n), selected=(curr_theme==name)))
+
+        elif self.settings_tab == "Background":
+            # Backgrounds list
+            btn_w = 200
+            btn_h = 40
+            
+            # Option to generate default if list is empty?
+            # We already loaded available backgrounds in init
+            
+            for i, bg_path in enumerate(self.available_backgrounds):
+                name = bg_path.stem.replace("_", " ").title()
+                is_selected = (hasattr(self, 'current_bg_path') and self.current_bg_path == bg_path)
+                
+                # Thumbnail?
+                # Generating thumbnails for every frame might be expensive. 
+                # Ideally, cache them. For now, let's just list names. The preview on the right shows the big image.
+                
+                rect = pygame.Rect(content_x, content_y + i * (btn_h + 10), btn_w, btn_h)
+                self.settings_buttons.append(Button(rect, name, lambda p=bg_path: self.load_background(p), selected=is_selected))
                 
         elif self.settings_tab == "Game":
             # Sound
@@ -608,6 +747,30 @@ class GameWindow:
         self.interaction.selected = None
         self.interaction.moves_from_selected.clear()
 
+    def apply_move_with_sound(self, move: Move) -> None:
+        # Determine sound triggers
+        is_capture = False
+        target_piece = self.game.board.get_piece(move.to_row, move.to_col)
+        if target_piece is not None:
+            is_capture = True
+        elif move.is_en_passant:
+            is_capture = True
+            
+        self.game.apply_move(move)
+        
+        is_check = self.game.is_in_check()
+        
+        if is_check:
+            self.play_sound("move-check")
+        elif is_capture:
+            self.play_sound("capture")
+        elif move.is_castling:
+            self.play_sound("castle")
+        elif move.promotion is not None:
+            self.play_sound("promote")
+        else:
+            self.play_sound("move-self")
+
     def apply_move_and_maybe_ai(self, move: Move, animate: bool = True) -> None:
         if self.current_animation is not None:
             return
@@ -615,7 +778,7 @@ class GameWindow:
             self.current_animation = MoveAnimation(self.board_renderer, self.game, move)
             self.pending_move = (move, False)
         else:
-            self.game.apply_move(move)
+            self.apply_move_with_sound(move)
             self.pending_move = None
             self.current_animation = None
             self.maybe_start_ai_move()
@@ -864,9 +1027,14 @@ class GameWindow:
             self.screen.fill((20, 20, 20))
 
         if self.state == "menu":
-            title = self.title_font.render("Chess Game", True, (255, 255, 255))
-            rect = title.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 - 150))
-            self.screen.blit(title, rect)
+            if self.logo_image:
+                rect = self.logo_image.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 - 150))
+                self.screen.blit(self.logo_image, rect)
+            else:
+                title = self.title_font.render("Chess Game", True, (255, 255, 255))
+                rect = title.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 - 150))
+                self.screen.blit(title, rect)
+                
             for b in self.menu_buttons:
                 b.draw(self.screen, self.button_font)
             self.message_overlay.draw(self.screen, self.small_font)
@@ -1027,7 +1195,7 @@ class GameWindow:
             if self.current_animation is not None and self.current_animation.is_done():
                 if self.pending_move is not None:
                     move, is_ai = self.pending_move
-                    self.game.apply_move(move)
+                    self.apply_move_with_sound(move)
                     self.pending_move = None
                     self.current_animation = None
                     if not is_ai:

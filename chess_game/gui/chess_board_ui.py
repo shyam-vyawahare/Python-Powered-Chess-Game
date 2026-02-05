@@ -49,9 +49,20 @@ class PieceImages:
             if self.fallback_font is not None:
                 text_surface = pygame.Surface((SQUARE_SIZE, SQUARE_SIZE), pygame.SRCALPHA)
                 color = (0, 0, 0) if symbol.islower() else (255, 255, 255)
+                
+                # Render text
                 text = self.fallback_font.render(symbol.upper(), True, color)
                 rect = text.get_rect(center=(SQUARE_SIZE // 2, SQUARE_SIZE // 2))
+                
+                # Render shadow
+                shadow_color = (0, 0, 0) if symbol.islower() else (50, 50, 50)
+                shadow = self.fallback_font.render(symbol.upper(), True, shadow_color)
+                shadow_rect = shadow.get_rect(center=(SQUARE_SIZE // 2 + 2, SQUARE_SIZE // 2 + 2))
+                
+                # Blit shadow then text
+                text_surface.blit(shadow, shadow_rect)
                 text_surface.blit(text, rect)
+                
                 self.letters[key] = text_surface
             if path.is_file():
                 try:
@@ -104,6 +115,11 @@ class BoardRenderer:
             "Blue": ((232, 235, 239), (125, 135, 150)),
             "Green": ((238, 238, 210), (118, 150, 86)),
             "B&W": ((240, 240, 240), (50, 50, 50)),
+            "Dark Wood": ((193, 154, 107), (101, 67, 33)),
+            "Gray": ((220, 220, 220), (128, 128, 128)),
+            "Blue-Gray": ((195, 215, 230), (85, 115, 140)),
+            "Sand": ((230, 210, 180), (180, 150, 110)),
+            "High-Contrast": ((255, 255, 255), (0, 0, 0)),
         }
         self.light_square_color = self.themes["Green"][0]
         self.dark_square_color = self.themes["Green"][1]
