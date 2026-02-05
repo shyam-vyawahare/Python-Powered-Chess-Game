@@ -6,7 +6,7 @@ import threading
 import queue
 import os
 from ..game_logic import Game
-from ..ai_opponent import choose_ai_move, AI_SETTINGS
+from ..ai_opponent import choose_ai_move, AI_SETTINGS, clear_ai_cache
 from ..utils import Color, Move, indices_to_square
 from ..pieces import PieceType, Piece
 from .chess_board_ui import BoardRenderer, BOARD_SIZE, SQUARE_SIZE
@@ -222,6 +222,7 @@ class GameWindow:
         self.ai_level_index = 1
         self.ai_depth = 3
         self.ai_randomness = 0.1
+        self.ai_time_limit = 1.0
         self.ai_thread: Optional[threading.Thread] = None
         self.ai_move_queue: queue.Queue = queue.Queue()
         self.promotion_dialog: Optional[PromotionDialog] = None
@@ -490,9 +491,11 @@ class GameWindow:
         settings = AI_SETTINGS.get(level, AI_SETTINGS["Medium"])
         self.ai_depth = settings["depth"]
         self.ai_randomness = settings["randomness"]
+        self.ai_time_limit = settings.get("time_limit", 1.0)
 
     def new_game(self) -> None:
         self.game = Game()
+        clear_ai_cache()
         self.interaction = InteractionState()
         self.current_animation = None
         self.pending_move = None
@@ -625,11 +628,14 @@ class GameWindow:
         if self.game.result:
             return
         color = self.game.board.current_player
+        
+        # Use a quick search for hint
         move = choose_ai_move(
             self.game.board,
             color,
-            max(1, self.ai_depth - 1),
-            0.0,
+            max_depth=2,
+            randomness=0.0,
+            time_limit=0.2
         )
         if move is None:
             self.message_overlay.show("No legal moves", frames=120)
@@ -783,9 +789,9 @@ class GameWindow:
             self.current_animation = None
             self.maybe_start_ai_move()
 
-    def run_ai_search(self, board_copy: Game, color: Color, depth: int, randomness: float) -> None:
+    def run_ai_search(self, board_copy: Game, color: Color, depth: int, randomness: float, time_limit: float) -> None:
         try:
-            ai_move = choose_ai_move(board_copy.board, color, depth, randomness)
+            ai_move = choose_ai_move(board_copy.board, color, depth, randomness, time_limit)
             self.ai_move_queue.put(ai_move)
         except Exception as e:
             print(f"AI Error: {e}")
@@ -807,7 +813,7 @@ class GameWindow:
         
         self.ai_thread = threading.Thread(
             target=self.run_ai_search,
-            args=(board_copy, self.ai_color, self.ai_depth, self.ai_randomness)
+            args=(board_copy, self.ai_color, self.ai_depth, self.ai_randomness, self.ai_time_limit)
         )
         self.ai_thread.daemon = True
         self.ai_thread.start()

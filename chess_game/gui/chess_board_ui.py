@@ -11,6 +11,7 @@ SQUARE_SIZE = BOARD_SIZE // 8
 LIGHT_SQUARE = (240, 217, 181)
 DARK_SQUARE = (181, 136, 99)
 HIGHLIGHT_MOVE = (186, 202, 68)
+HIGHLIGHT_HINT_SOURCE = (200, 220, 100)
 HIGHLIGHT_SELECTED = (246, 246, 105)
 HIGHLIGHT_LAST_MOVE = (205, 210, 106)
 HIGHLIGHT_INVALID = (220, 50, 50)
@@ -193,6 +194,11 @@ class BoardRenderer:
         if hint_move is not None:
             rect = self.square_to_rect(hint_move.to_row, hint_move.to_col)
             pygame.draw.rect(surface, HIGHLIGHT_MOVE, rect, 0)
+            
+            # Highlight Source Square for Hint
+            rect_src = self.square_to_rect(hint_move.from_row, hint_move.from_col)
+            # Use an outline or different style
+            pygame.draw.rect(surface, HIGHLIGHT_HINT_SOURCE, rect_src, 5) # Thick outline
         if selected is not None:
             rect = self.square_to_rect(*selected)
             pygame.draw.rect(surface, HIGHLIGHT_SELECTED, rect, 0)
