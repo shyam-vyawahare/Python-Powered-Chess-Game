@@ -713,7 +713,12 @@ class GameWindow:
                         WINDOW_WIDTH - 160,
                         60,
                     )
-                    dialog = PromotionDialog(rect, self.handle_promotion_choice)
+                    dialog = PromotionDialog(
+                        rect, 
+                        self.handle_promotion_choice,
+                        self.board_renderer.piece_images,
+                        self.game.board.current_player
+                    )
                     dialog.layout()
                     self.promotion_dialog = dialog
                     return

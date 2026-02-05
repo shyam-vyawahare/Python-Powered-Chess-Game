@@ -1,5 +1,7 @@
-from typing import Optional, Callable, List, Tuple
+from typing import Optional, Callable, List, Tuple, Any
 import pygame
+from chess_game.pieces import Piece, PieceType
+from chess_game.utils import Color
 
 
 class PromotionDialog:
@@ -7,10 +9,20 @@ class PromotionDialog:
         self,
         rect: pygame.Rect,
         on_choice: Callable[[str], None],
+        piece_images: Any,
+        color: Color
     ) -> None:
         self.rect = rect
         self.on_choice = on_choice
+        self.piece_images = piece_images
+        self.color = color
         self.options = ["Q", "R", "B", "N"]
+        self.option_pieces = {
+            "Q": Piece(color, PieceType.QUEEN),
+            "R": Piece(color, PieceType.ROOK),
+            "B": Piece(color, PieceType.BISHOP),
+            "N": Piece(color, PieceType.KNIGHT)
+        }
         self.option_rects: List[pygame.Rect] = []
 
     def layout(self) -> None:
@@ -23,10 +35,29 @@ class PromotionDialog:
     def draw(self, surface: pygame.Surface, font: pygame.font.Font) -> None:
         pygame.draw.rect(surface, (40, 40, 40), self.rect, border_radius=6)
         pygame.draw.rect(surface, (200, 200, 200), self.rect, 2, border_radius=6)
+        
         for option, rect in zip(self.options, self.option_rects):
-            text = font.render(option, True, (230, 230, 230))
-            t_rect = text.get_rect(center=rect.center)
-            surface.blit(text, t_rect)
+            piece = self.option_pieces[option]
+            img = self.piece_images.get(piece)
+            
+            if img:
+                # Scale if necessary (images are usually sized for board squares)
+                # Rect height is 60. Square size is likely bigger (75).
+                # piece_images.get returns a surface sized for the board.
+                # We might need to scale it down to fit the dialog button.
+                
+                # Check image size
+                if img.get_height() > rect.height - 10:
+                    scale = (rect.height - 10) / img.get_height()
+                    new_size = (int(img.get_width() * scale), int(img.get_height() * scale))
+                    img = pygame.transform.smoothscale(img, new_size)
+                    
+                img_rect = img.get_rect(center=rect.center)
+                surface.blit(img, img_rect)
+            else:
+                text = font.render(option, True, (230, 230, 230))
+                t_rect = text.get_rect(center=rect.center)
+                surface.blit(text, t_rect)
 
     def handle_mouse_down(self, pos) -> bool:
         for option, rect in zip(self.options, self.option_rects):
@@ -127,4 +158,3 @@ class WinningDialog:
             self.on_menu()
             return True
         return False
-
