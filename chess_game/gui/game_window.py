@@ -5,8 +5,9 @@ import random
 import threading
 import queue
 import os
+import math
 from ..game_logic import Game
-from ..ai_opponent import choose_ai_move, AI_SETTINGS, clear_ai_cache
+from ..ai_opponent import choose_ai_move, AI_SETTINGS, clear_ai_cache, LEARNING_SYSTEM
 from ..utils import Color, Move, indices_to_square
 from ..pieces import PieceType, Piece
 from .chess_board_ui import BoardRenderer, BOARD_SIZE, SQUARE_SIZE
@@ -19,6 +20,10 @@ WINDOW_HEIGHT = 720
 PANEL_BG = (30, 30, 30)
 TEXT_COLOR = (230, 230, 230)
 
+# Turn States
+TURN_PLAYER = "player"
+TURN_AI = "ai"
+TURN_LOCKED = "locked"
 
 class InteractionState:
     def __init__(self) -> None:
@@ -125,7 +130,6 @@ class GameWindow:
         self.sounds_dir = self.assets_dir / "sounds"
         
         # Load Sounds
-        # Initialize mixer explicitly
         try:
             pygame.mixer.init()
         except Exception:
@@ -154,7 +158,6 @@ class GameWindow:
         if logo_path.exists():
             try:
                 img = pygame.image.load(str(logo_path)).convert_alpha()
-                # Scale proportionally to reasonable width (e.g. 500px)
                 w = img.get_width()
                 h = img.get_height()
                 target_w = 500
@@ -184,7 +187,6 @@ class GameWindow:
                 if item.suffix.lower() in ['.jpg', '.png', '.jpeg']:
                     self.available_backgrounds.append(item)
         
-        # Load Initial Background (Prefer Classic)
         self.background_surface = None
         classic_bg = None
         for bg in self.available_backgrounds:
@@ -236,16 +238,30 @@ class GameWindow:
             "sound_capture": True,
             "highlight_check": False
         }
+
+        self.turn_state = TURN_PLAYER
+        self.ai_move_scheduled = False
+
+        # Time Control Settings
+        self.time_control = None  # None means "No Clock"
+        self.white_time = 0.0  # seconds
+        self.black_time = 0.0
+        self.increment_white = 0.0
+        self.increment_black = 0.0
+        self.last_frame_time = 0
+        self.clock_buttons: List[Button] = []
+
         self.menu_buttons: List[Button] = []
         self.difficulty_buttons: List[Button] = []
         self.settings_tab = "Pieces"
         self.settings_tab_buttons: List[Button] = []
         self.settings_buttons: List[Button] = []
         self.color_buttons: List[Button] = []
-        # self.background_surface is initialized above
+        
         self.create_menus()
         self.create_settings_buttons()
         self.create_color_buttons()
+        self.create_clock_buttons()
 
     def _create_background(self) -> pygame.Surface:
         surface = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT))
@@ -288,20 +304,13 @@ class GameWindow:
             self.difficulty_buttons.append(Button(rect, label, cb))
 
     def create_settings_buttons(self) -> None:
-        center_x = WINDOW_WIDTH // 2
-        start_y = WINDOW_HEIGHT // 2 - 80
-        w = 260
-        h = 40
-        # Will be updated in draw or update loop based on current settings, but initialized here
-        # Actually, let's just create the rects and callbacks, and text will be dynamic or buttons updated
-        # Simpler: Recreate buttons when entering settings or updating them.
         pass
 
     def load_background(self, path: Path) -> None:
         try:
             img = pygame.image.load(str(path)).convert()
             self.background_surface = pygame.transform.smoothscale(img, (WINDOW_WIDTH, WINDOW_HEIGHT))
-            self.current_bg_path = path # Store current for UI highlighting if needed
+            self.current_bg_path = path
         except Exception:
             pass
 
@@ -318,40 +327,30 @@ class GameWindow:
         self.current_piece_set = name
         self.board_renderer.piece_images.images.clear()
         self.board_renderer.piece_images.load(self.pieces_dir / name)
-        # If we were in letter mode, we stay in letter mode, but images are updated in background
-        # If we were in image mode, we see new images immediately
         self.update_settings_buttons()
 
     def update_settings_buttons(self) -> None:
         self.settings_buttons = []
         self.settings_tab_buttons = []
         
-        # Layout
         tab_width = 150
         tab_height = 40
         start_x = 40
         start_y = 100
         
-        # Tabs
         tabs = ["Pieces", "Board", "Background", "Game"]
         for i, tab in enumerate(tabs):
             rect = pygame.Rect(start_x, start_y + i * (tab_height + 10), tab_width, tab_height)
             selected = (self.settings_tab == tab)
             self.settings_tab_buttons.append(Button(rect, tab, lambda t=tab: self.set_settings_tab(t), selected=selected))
             
-        # Back button
         self.settings_buttons.append(Button(pygame.Rect(40, WINDOW_HEIGHT - 80, 150, 40), "Back", self.menu_back_to_main))
             
-        # Content
         content_x = 220
         content_y = 100
         
         if self.settings_tab == "Pieces":
-            # Piece Style
             mode = self.board_renderer.piece_images.mode
-            
-            # 1. Letters Option
-            # Letters: "K" Surface
             letter_icon = pygame.Surface((32, 32), pygame.SRCALPHA)
             k_font = pygame.font.SysFont("serif", 28, bold=True)
             k_text = k_font.render("K", True, (255, 255, 255))
@@ -367,13 +366,9 @@ class GameWindow:
                 icon=letter_icon
             ))
             
-            # 2. Image Sets
             current_y = content_y + btn_h + 10
             
             for set_name in self.available_piece_sets:
-                # Load a sample icon for this set (e.g. White Knight)
-                # We need to construct the path manually to get the icon without reloading the whole set into the renderer just for the button
-                # Actually, simpler: just use the name. Or try to load one image.
                 icon = None
                 try:
                     icon_path = self.pieces_dir / set_name / "white_knight.png"
@@ -395,54 +390,33 @@ class GameWindow:
                 current_y += btn_h + 10
                 
         elif self.settings_tab == "Board":
-            # Themes
             themes = list(self.board_renderer.themes.keys())
             curr_theme = self.settings["theme"]
             if curr_theme == "Classic": curr_theme = "Brown"
             
-            # Use a list layout to avoid overlapping with preview
             btn_w = 200
             btn_h = 40
             spacing = 10
             
             for i, name in enumerate(themes):
-                # Single column
                 x = content_x
                 y = content_y + i * (btn_h + spacing)
-                
-                # Check bounds - if too many themes, might need scrolling or 2 columns with smaller width
-                # But for now, we have about 9 themes. 9 * 50 = 450px.
-                # content_y is 100. 100 + 450 = 550. WINDOW_HEIGHT is 720. Fits.
-                
                 rect = pygame.Rect(x, y, btn_w, btn_h)
                 self.settings_buttons.append(Button(rect, name, lambda n=name: self.set_theme_mode(n), selected=(curr_theme==name)))
 
         elif self.settings_tab == "Background":
-            # Backgrounds list
             btn_w = 200
             btn_h = 40
-            
-            # Option to generate default if list is empty?
-            # We already loaded available backgrounds in init
-            
             for i, bg_path in enumerate(self.available_backgrounds):
                 name = bg_path.stem.replace("_", " ").title()
                 is_selected = (hasattr(self, 'current_bg_path') and self.current_bg_path == bg_path)
-                
-                # Thumbnail?
-                # Generating thumbnails for every frame might be expensive. 
-                # Ideally, cache them. For now, let's just list names. The preview on the right shows the big image.
-                
                 rect = pygame.Rect(content_x, content_y + i * (btn_h + 10), btn_w, btn_h)
                 self.settings_buttons.append(Button(rect, name, lambda p=bg_path: self.load_background(p), selected=is_selected))
                 
         elif self.settings_tab == "Game":
-            # Sound
             snd = self.settings["sound_move"]
             self.settings_buttons.append(Button(pygame.Rect(content_x, content_y, 140, 40), "Sound: " + ("On" if snd else "Off"), 
                 self.toggle_sound))
-            
-            # Check Highlight
             chk = self.settings["highlight_check"]
             self.settings_buttons.append(Button(pygame.Rect(content_x, content_y + 60, 200, 40), "Show Check: " + ("Yes" if chk else "No"), 
                 lambda: self.set_highlight_check(not chk)))
@@ -486,20 +460,96 @@ class GameWindow:
         ]
         self.color_buttons = [Button(pygame.Rect(center_x - w//2, start_y + i*(h+10), w, h), labels[i], callbacks[i]) for i in range(4)]
 
+    def create_clock_buttons(self) -> None:
+        center_x = WINDOW_WIDTH // 2
+        start_y = WINDOW_HEIGHT // 2 - 200
+        
+        self.clock_buttons = []
+        
+        # Helper to add section
+        def add_section(title, options, y_pos):
+            btn_w = 100
+            btn_h = 40
+            spacing_x = 10
+            total_w = len(options) * btn_w + (len(options) - 1) * spacing_x
+            start_x = center_x - total_w // 2
+            
+            for i, (label, time_min, inc_sec) in enumerate(options):
+                x = start_x + i * (btn_w + spacing_x)
+                rect = pygame.Rect(x, y_pos, btn_w, btn_h)
+                
+                def set_tc(m=time_min, s=inc_sec):
+                    self.set_time_control(m, s)
+                    
+                self.clock_buttons.append(Button(rect, label, set_tc))
+            
+            return y_pos + btn_h + 40
+
+        # Bullet
+        y = start_y + 40
+        y = add_section("Bullet", [("1 min", 1, 0), ("1 | 1", 1, 1), ("2 | 1", 2, 1)], y)
+        
+        # Blitz
+        y = add_section("Blitz", [("3 min", 3, 0), ("3 | 2", 3, 2), ("5 min", 5, 0)], y)
+        
+        # Rapid
+        y = add_section("Rapid", [("10 min", 10, 0), ("15 | 10", 15, 10), ("30 min", 30, 0)], y)
+        
+        # Casual
+        rect = pygame.Rect(center_x - 75, y, 150, 40)
+        self.clock_buttons.append(Button(rect, "No Clock", lambda: self.set_time_control(None, 0)))
+        
+        # Back
+        self.clock_buttons.append(Button(pygame.Rect(40, WINDOW_HEIGHT - 80, 100, 40), "Back", self.menu_back_from_clock))
+
+    def set_time_control(self, minutes: Optional[int], increment: int) -> None:
+        if minutes is None:
+            self.time_control = None
+        else:
+            self.time_control = (minutes * 60, increment)
+        
+        self.new_game()
+        self.state = "playing"
+        
+        # If AI is White, schedule it immediately
+        if self.mode_human_vs_ai and self.game.board.current_player == self.ai_color:
+            self.turn_state = TURN_AI
+            self.ai_move_scheduled = True
+        else:
+            self.turn_state = TURN_PLAYER
+
+    def menu_back_from_clock(self) -> None:
+        if self.mode_human_vs_ai:
+            self.state = "color_selection"
+        else:
+            self.state = "menu"
+
     def apply_ai_settings(self) -> None:
         level = self.ai_level_names[self.ai_level_index]
         settings = AI_SETTINGS.get(level, AI_SETTINGS["Medium"])
         self.ai_depth = settings["depth"]
         self.ai_randomness = settings["randomness"]
-        self.ai_time_limit = settings.get("time_limit", 1.0)
+        self.ai_time_limit = settings["time_limit"]
 
     def new_game(self) -> None:
         self.game = Game()
-        clear_ai_cache()
+        self.board_renderer.invalid_flash_frames = 0
         self.interaction = InteractionState()
         self.current_animation = None
         self.pending_move = None
         self.message_overlay.show("New game started", frames=120)
+        
+        if self.time_control:
+            self.white_time = float(self.time_control[0])
+            self.black_time = float(self.time_control[0])
+            self.increment_white = self.time_control[1]
+            self.increment_black = self.time_control[1]
+        else:
+            self.white_time = 0.0
+            self.black_time = 0.0
+            self.increment_white = 0.0
+            self.increment_black = 0.0
+        self.last_frame_time = pygame.time.get_ticks()
 
     def menu_single_player(self) -> None:
         self.state = "difficulty"
@@ -507,8 +557,7 @@ class GameWindow:
     def menu_two_players(self) -> None:
         self.mode_human_vs_ai = False
         self.board_renderer.orientation = Color.WHITE
-        self.new_game()
-        self.state = "playing"
+        self.state = "clock_selection"
 
     def menu_settings(self) -> None:
         self.last_state = self.state
@@ -518,7 +567,7 @@ class GameWindow:
     def menu_back_to_main(self) -> None:
         if hasattr(self, 'last_state') and self.last_state == "playing":
             self.state = "playing"
-            self.update_settings_buttons() # Cleanup if needed
+            self.update_settings_buttons()
         else:
             self.state = "menu"
         
@@ -539,10 +588,7 @@ class GameWindow:
             self.human_color = color
         self.ai_color = self.human_color.opposite
         self.board_renderer.orientation = self.human_color
-        self.new_game()
-        self.state = "playing"
-        # If AI is white, trigger first move
-        self.maybe_start_ai_move()
+        self.state = "clock_selection"
 
     def toggle_piece_display_mode(self) -> None:
         images_mode = self.board_renderer.piece_images.mode == "images"
@@ -579,7 +625,13 @@ class GameWindow:
         self.new_game()
         self.state = "playing"
         self.winning_dialog = None
-        self.maybe_start_ai_move()
+        
+        # If AI is White, schedule it immediately
+        if self.mode_human_vs_ai and self.game.board.current_player == self.ai_color:
+            self.turn_state = TURN_AI
+            self.ai_move_scheduled = True
+        else:
+            self.turn_state = TURN_PLAYER
 
     def return_to_menu(self) -> None:
         self.new_game()
@@ -596,11 +648,8 @@ class GameWindow:
         if self.current_animation is not None:
             return
             
-        # Single Player Logic: Undo both AI and Human move if it is Human's turn
         undo_count = 1
         if self.mode_human_vs_ai and self.game.board.current_player == self.human_color:
-             # It is human's turn, so AI must have moved last.
-             # We want to undo AI's move AND Human's previous move to let Human retry.
              if len(self.game.history) >= 2:
                  undo_count = 2
         
@@ -614,8 +663,6 @@ class GameWindow:
         if success:
             self.interaction = InteractionState()
             self.message_overlay.show("Move undone", frames=120)
-            
-            # Clear any pending AI moves in queue to prevent ghost moves
             while not self.ai_move_queue.empty():
                 try:
                     self.ai_move_queue.get_nowait()
@@ -628,8 +675,6 @@ class GameWindow:
         if self.game.result:
             return
         color = self.game.board.current_player
-        
-        # Use a quick search for hint
         move = choose_ai_move(
             self.game.board,
             color,
@@ -667,6 +712,14 @@ class GameWindow:
             return
         if self.current_animation is not None:
             return
+        
+        # STRICT TURN STATE CHECK
+        if self.mode_human_vs_ai:
+            if self.turn_state != TURN_PLAYER:
+                return
+            if self.game.board.current_player != self.human_color:
+                return
+
         square = self.board_renderer.pixel_to_square(*pos)
         if square is None:
             self.interaction.selected = None
@@ -678,17 +731,12 @@ class GameWindow:
         if self.interaction.awaiting_promotion:
             return
         
-        # Logic update for Drag & Drop and Deselect
-        # If we clicked (MOUSEBUTTONDOWN), we might be starting a drag or selecting.
-        
-        # 1. If we click on our own piece, select it (and start drag logic elsewhere)
         if piece is not None and piece.color is board.current_player:
             self.interaction.selected = (row, col)
             self.interaction.moves_from_selected = self.compute_moves_from(row, col)
             self.interaction.hint_move = None
             return
 
-        # 2. If we have a selection, try to move to the clicked square
         if self.interaction.selected is not None:
             targets = self.interaction.moves_from_selected
             if (row, col) in targets:
@@ -723,20 +771,14 @@ class GameWindow:
                     self.promotion_dialog = dialog
                     return
                 move = moves[0]
-                self.apply_move_and_maybe_ai(move, animate=animate)
+                self.apply_move_and_schedule_ai(move, animate=animate)
                 self.interaction.selected = None
                 self.interaction.moves_from_selected.clear()
                 return
             
-            # 3. If clicking empty square or enemy piece that is NOT a valid move target -> Deselect
-            # (If it was own piece, it was handled in #1)
             self.interaction.selected = None
             self.interaction.moves_from_selected.clear()
             return
-
-        # 4. If no selection and clicked empty/enemy -> Invalid flash (or just ignore)
-        # User requested: "Invalid actions should ... simply not allow the move ... No visual punishment"
-        # So we just ignore.
         pass
 
     def handle_promotion_choice(self, choice: str) -> None:
@@ -751,7 +793,7 @@ class GameWindow:
             self.interaction.pending_promotion_moves = []
             return
         move = moves[0]
-        self.apply_move_and_maybe_ai(move)
+        self.apply_move_and_schedule_ai(move)
         self.interaction.awaiting_promotion = False
         self.promotion_dialog = None
         self.interaction.pending_promotion_moves = []
@@ -759,7 +801,6 @@ class GameWindow:
         self.interaction.moves_from_selected.clear()
 
     def apply_move_with_sound(self, move: Move) -> None:
-        # Determine sound triggers
         is_capture = False
         target_piece = self.game.board.get_piece(move.to_row, move.to_col)
         if target_piece is not None:
@@ -768,6 +809,16 @@ class GameWindow:
             is_capture = True
             
         self.game.apply_move(move)
+        
+        # Clock Update - Apply Increment
+        if self.time_control is not None:
+            # The move is done, so current_player is the NEXT player.
+            # The player who just moved is opposite.
+            just_moved = self.game.board.current_player.opposite
+            if just_moved == Color.WHITE:
+                self.white_time += self.increment_white
+            else:
+                self.black_time += self.increment_black
         
         is_check = self.game.is_in_check()
         
@@ -782,109 +833,226 @@ class GameWindow:
         else:
             self.play_sound("move-self")
 
-    def apply_move_and_maybe_ai(self, move: Move, animate: bool = True) -> None:
+    def apply_move_and_schedule_ai(self, move: Move, animate: bool = True) -> None:
         if self.current_animation is not None:
             return
         if animate:
             self.current_animation = MoveAnimation(self.board_renderer, self.game, move)
-            self.pending_move = (move, False)
+            # Pending move: (move, is_ai_response_needed)
+            # If Human vs AI, and we just moved (Human), then YES, AI response needed.
+            # If AI just moved, then NO, AI response NOT needed (return control to player).
+            is_ai_needed = self.mode_human_vs_ai and not self.game.result and (self.game.board.current_player != self.ai_color)
+            self.pending_move = (move, is_ai_needed)
+            self.turn_state = TURN_LOCKED # Lock input during animation
         else:
             self.apply_move_with_sound(move)
             self.pending_move = None
             self.current_animation = None
-            self.maybe_start_ai_move()
+            
+            is_ai_needed = self.mode_human_vs_ai and not self.game.result and (self.game.board.current_player != self.ai_color)
+            if is_ai_needed:
+                # Transition to AI Turn
+                self.turn_state = TURN_AI
+                self.ai_move_scheduled = True
+            else:
+                self.turn_state = TURN_PLAYER
 
     def run_ai_search(self, board_copy: Game, color: Color, depth: int, randomness: float, time_limit: float) -> None:
         try:
-            ai_move = choose_ai_move(board_copy.board, color, depth, randomness, time_limit)
+            ai_move = choose_ai_move(
+                board_copy.board, 
+                color, 
+                depth, 
+                randomness, 
+                time_limit,
+                move_history=board_copy.move_log
+            )
             self.ai_move_queue.put(ai_move)
         except Exception as e:
             print(f"AI Error: {e}")
             self.ai_move_queue.put(None)
 
-    def maybe_start_ai_move(self) -> None:
+    def trigger_ai_move(self) -> None:
         if not self.mode_human_vs_ai or self.game.result:
             return
         if self.game.board.current_player is not self.ai_color:
             return
-        self.message_overlay.show("AI thinking...", frames=180)
         
-        # Start AI in a separate thread
+        # Don't show overlay if move is instant (0.1s), it just flickers.
+        # self.message_overlay.show("AI thinking...", frames=180)
+        
         board_copy = Game()
-        board_copy.board = self.game.board.copy() # Deep copy of the board state
-        # We need to ensure Game state (history, repetition) is also copied if AI uses it,
-        # but choose_ai_move currently only takes 'board' (ChessBoard).
-        # So passing board_copy.board should be sufficient if choose_ai_move is isolated.
+        board_copy.board = self.game.board.copy()
+        board_copy.move_log = list(self.game.move_log)
+        
+        limit = self.ai_time_limit
+        # Hard Cap Logic is now in ai_opponent.py, but we pass the limit here.
         
         self.ai_thread = threading.Thread(
             target=self.run_ai_search,
-            args=(board_copy, self.ai_color, self.ai_depth, self.ai_randomness, self.ai_time_limit)
+            args=(board_copy, self.ai_color, self.ai_depth, self.ai_randomness, limit)
         )
         self.ai_thread.daemon = True
         self.ai_thread.start()
 
+    def update_game_logic(self) -> None:
+        # 1. Handle Animation Completion
+        if self.current_animation is not None:
+            if self.current_animation.is_done():
+                move = self.current_animation.move
+                self.current_animation = None
+                
+                # Apply the move permanently
+                self.apply_move_with_sound(move)
+                
+                # Check pending state for AI trigger
+                if self.pending_move:
+                    _, ai_needed = self.pending_move
+                    self.pending_move = None
+                    if ai_needed:
+                        self.turn_state = TURN_AI
+                        self.ai_move_scheduled = True
+                    else:
+                        self.turn_state = TURN_PLAYER
+        
+        # 2. Handle AI Scheduling (One Shot)
+        if self.turn_state == TURN_AI and self.ai_move_scheduled:
+            self.ai_move_scheduled = False
+            self.trigger_ai_move()
+            
+        # 3. Handle AI Completion
+        if self.turn_state == TURN_AI:
+            try:
+                ai_move = self.ai_move_queue.get_nowait()
+                if ai_move:
+                    # Apply AI Move
+                    self.apply_move_and_schedule_ai(ai_move, animate=True)
+                    # Note: apply_move_and_schedule_ai will set TURN_LOCKED then TURN_PLAYER (since is_ai_needed will be False for AI's move)
+                    # Wait, let's check apply_move_and_schedule_ai logic for AI move.
+                    # If AI moved, is_ai_needed is False. So it sets TURN_PLAYER. Correct.
+                else:
+                    # AI failed or returned None (Stalemate/Mate detected by AI?)
+                    print("AI returned None")
+                    self.turn_state = TURN_PLAYER
+            except queue.Empty:
+                pass
+                
+        # 4. Handle Clock
+        current_time = pygame.time.get_ticks()
+        dt = (current_time - self.last_frame_time) / 1000.0
+        self.last_frame_time = current_time
+        
+        if self.time_control is not None and not self.game.result:
+            # Rule: Pause clocks during AI computation and Animations
+            is_thinking = (self.turn_state == TURN_AI and self.ai_thread is not None and self.ai_thread.is_alive())
+            is_animating = (self.current_animation is not None)
+            
+            if not is_thinking and not is_animating:
+                if self.game.board.current_player == Color.WHITE:
+                    self.white_time -= dt
+                    if self.white_time <= 0:
+                        self.white_time = 0
+                        self.game.result = "Black wins on time"
+                        self.winning_dialog = WinningDialog(
+                            pygame.Rect(WINDOW_WIDTH//2 - 150, WINDOW_HEIGHT//2 - 100, 300, 200),
+                            "Black wins on time!",
+                            self.restart_game,
+                            self.return_to_menu
+                        )
+                else:
+                    self.black_time -= dt
+                    if self.black_time <= 0:
+                        self.black_time = 0
+                        self.game.result = "White wins on time"
+                        self.winning_dialog = WinningDialog(
+                            pygame.Rect(WINDOW_WIDTH//2 - 150, WINDOW_HEIGHT//2 - 100, 300, 200),
+                            "White wins on time!",
+                            self.restart_game,
+                            self.return_to_menu
+                        )
+
     def draw_side_panel(self) -> None:
-        # Align panel with the board
         board_y = (WINDOW_HEIGHT - BOARD_SIZE) // 2
         panel_x = BOARD_SIZE + 80
         panel_width = WINDOW_WIDTH - panel_x - 40
         panel_rect = pygame.Rect(panel_x, board_y, panel_width, BOARD_SIZE)
         
-        # Transparent background for panel
         s = pygame.Surface((panel_rect.width, panel_rect.height))
         s.set_alpha(200)
         s.fill((0, 0, 0))
         self.screen.blit(s, (panel_rect.x, panel_rect.y))
         
-        turn = "White" if self.game.board.current_player is Color.WHITE else "Black"
+        y = panel_rect.y + 10
+        
+        # 1. Game Info Title
+        text = self.side_font.render("Game Info", True, TEXT_COLOR)
+        self.screen.blit(text, (panel_rect.x + 10, y))
+        y += 30
+        
+        # 2. Clocks (New UI)
+        if self.time_control is not None:
+            def format_time(t):
+                if t < 0: t = 0
+                m = int(t // 60)
+                s = int(t % 60)
+                # ms = int((t - int(t)) * 10)
+                return f"{m:02d}:{s:02d}"
+            
+            w_time_str = format_time(self.white_time)
+            b_time_str = format_time(self.black_time)
+            
+            # Colors
+            w_active = self.game.board.current_player == Color.WHITE
+            b_active = self.game.board.current_player == Color.BLACK
+            
+            w_bg_color = (60, 60, 60) if w_active else (30, 30, 30)
+            b_bg_color = (60, 60, 60) if b_active else (30, 30, 30)
+            
+            w_border = (0, 255, 0) if w_active else (100, 100, 100)
+            b_border = (0, 255, 0) if b_active else (100, 100, 100)
+            
+            w_text_color = (255, 50, 50) if self.white_time < 10 else (255, 255, 255)
+            b_text_color = (255, 50, 50) if self.black_time < 10 else (255, 255, 255)
+            
+            # Draw White Clock
+            clock_h = 40
+            pygame.draw.rect(self.screen, w_bg_color, (panel_rect.x + 10, y, 120, clock_h))
+            pygame.draw.rect(self.screen, w_border, (panel_rect.x + 10, y, 120, clock_h), 2)
+            lbl = self.side_font.render(f"White: {w_time_str}", True, w_text_color)
+            self.screen.blit(lbl, (panel_rect.x + 20, y + 10))
+            
+            y += clock_h + 10
+            
+            # Draw Black Clock
+            pygame.draw.rect(self.screen, b_bg_color, (panel_rect.x + 10, y, 120, clock_h))
+            pygame.draw.rect(self.screen, b_border, (panel_rect.x + 10, y, 120, clock_h), 2)
+            lbl = self.side_font.render(f"Black: {b_time_str}", True, b_text_color)
+            self.screen.blit(lbl, (panel_rect.x + 20, y + 10))
+            
+            y += clock_h + 20
+        
+        # 3. Turn Indicator
+        turn_str = "White" if self.game.board.current_player is Color.WHITE else "Black"
+        text = self.side_font.render("Turn: " + turn_str, True, TEXT_COLOR)
+        self.screen.blit(text, (panel_rect.x + 10, y))
+        y += 24
+        
+        # 4. Status
         status = "Active"
         if self.game.result:
             status = self.game.result
-        else:
-            if self.game.is_checkmate():
-                status = "Checkmate"
-            elif self.game.is_stalemate():
-                status = "Stalemate"
-            elif self.game.is_in_check():
-                status = "Check"
-        y = panel_rect.y + 10
-        
-        # Game Info
-        text = self.side_font.render("Game Info", True, TEXT_COLOR)
-        self.screen.blit(text, (panel_rect.x + 10, y))
-        y += 24
-        
-        # Turn
-        text = self.side_font.render("Turn: " + turn, True, TEXT_COLOR)
-        self.screen.blit(text, (panel_rect.x + 10, y))
-        y += 24
-        
-        # Status (Wrapped)
-        status_prefix = "Status: "
-        full_status = status_prefix + status
-        
-        words = full_status.split(' ')
-        current_line = []
-        
-        for word in words:
-            test_line = ' '.join(current_line + [word])
-            w, h = self.side_font.size(test_line)
-            if w < panel_rect.width - 20:
-                current_line.append(word)
-            else:
-                if current_line:
-                    line_surf = self.side_font.render(' '.join(current_line), True, TEXT_COLOR)
-                    self.screen.blit(line_surf, (panel_rect.x + 10, y))
-                    y += 24
-                current_line = [word]
-        if current_line:
-            line_surf = self.side_font.render(' '.join(current_line), True, TEXT_COLOR)
-            self.screen.blit(line_surf, (panel_rect.x + 10, y))
-            y += 24
+        elif self.game.is_checkmate():
+            status = "Checkmate"
+        elif self.game.is_stalemate():
+            status = "Stalemate"
+        elif self.game.is_in_check():
+            status = "Check"
             
-        y += 10
+        status_surf = self.side_font.render(f"Status: {status}", True, TEXT_COLOR)
+        self.screen.blit(status_surf, (panel_rect.x + 10, y))
+        y += 30
         
-        # Captured pieces helper
+        # 5. Captured Pieces
         def draw_captured(label, pieces, start_y):
             lbl = self.side_font.render(label, True, TEXT_COLOR)
             self.screen.blit(lbl, (panel_rect.x + 10, start_y))
@@ -896,7 +1064,7 @@ class GameWindow:
             icon_size = SQUARE_SIZE // 3
             available_width = panel_rect.width - 20
             count = len(pieces)
-            step = 20 # default spacing
+            step = 20
             
             required_width = (count - 1) * step + icon_size
             if required_width > available_width and count > 1:
@@ -918,11 +1086,12 @@ class GameWindow:
         y = draw_captured("Captured Black:", self.game.captured_black, y)
         
         y += 10
+        
+        # 6. Move Log
         text = self.side_font.render("Moves:", True, TEXT_COLOR)
         self.screen.blit(text, (panel_rect.x + 10, y))
         y += 22
         
-        # Format moves into "1. e4 e5" style
         formatted_lines = []
         for i in range(0, len(self.game.move_log), 2):
             move_num = i // 2 + 1
@@ -933,7 +1102,7 @@ class GameWindow:
             else:
                 formatted_lines.append(f"{move_num}. {white_move}")
                 
-        max_lines = 12
+        max_lines = 8 # Reduced lines to fit clock
         start_idx = max(0, len(formatted_lines) - max_lines)
         display_lines = formatted_lines[start_idx:]
         
@@ -964,9 +1133,8 @@ class GameWindow:
                     self.board_renderer.update_hover(pos)
                     self.button_bar.handle_mouse_move(pos)
                     self.btn_main_menu.handle_mouse_move(pos)
-                    # Dragging logic
                     if self.interaction.dragging and self.interaction.selected:
-                        pass # Just trigger redraw
+                        pass
                 elif self.state == "menu":
                     for b in self.menu_buttons:
                         b.handle_mouse_move(pos)
@@ -981,6 +1149,9 @@ class GameWindow:
                 elif self.state == "color_selection":
                     for b in self.color_buttons:
                         b.handle_mouse_move(pos)
+                elif self.state == "clock_selection":
+                    for b in self.clock_buttons:
+                        b.handle_mouse_move(pos)
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 pos = event.pos
                 if self.state == "playing":
@@ -989,7 +1160,6 @@ class GameWindow:
                             continue
                     if self.board_renderer.board_rect().collidepoint(pos):
                         self.handle_board_click(pos)
-                        # Start Drag
                         if self.interaction.selected:
                             sq = self.board_renderer.pixel_to_square(*pos)
                             if sq == self.interaction.selected:
@@ -1014,25 +1184,25 @@ class GameWindow:
                 elif self.state == "color_selection":
                     for b in self.color_buttons:
                         b.handle_mouse_down(pos)
+                elif self.state == "clock_selection":
+                    for b in self.clock_buttons:
+                        b.handle_mouse_down(pos)
             elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
                 if self.state == "playing" and self.interaction.dragging:
                     pos = event.pos
                     self.interaction.dragging = False
                     self.interaction.drag_piece = None
                     
-                    # Try to complete move
                     square = self.board_renderer.pixel_to_square(*pos)
                     if square and self.interaction.selected:
                         r, c = square
-                        # If released on same square, do nothing (keep selected)
                         if (r, c) == self.interaction.selected:
                             continue
                         
-                        # Try to move
                         self.handle_board_click(pos, animate=False)
 
     def draw(self) -> None:
-        if self.state in ["menu", "difficulty", "settings", "color_selection"]:
+        if self.state in ["menu", "difficulty", "settings", "color_selection", "clock_selection"]:
             self.screen.blit(self.background_surface, (0, 0))
         else:
             self.screen.fill((20, 20, 20))
@@ -1069,18 +1239,15 @@ class GameWindow:
             for b in self.settings_buttons:
                 b.draw(self.screen, self.button_font)
                 
-            # Preview Area
             if self.settings_tab in ["Pieces", "Board"]:
                 preview_rect = pygame.Rect(450, 100, 400, 400)
                 pygame.draw.rect(self.screen, (40, 40, 40), preview_rect)
                 pygame.draw.rect(self.screen, (100, 100, 100), preview_rect, 2)
                 
-                # Get theme colors
                 theme_name = self.settings["theme"]
                 if theme_name == "Classic": theme_name = "Brown"
                 light, dark = self.board_renderer.themes.get(theme_name, ((240, 217, 181), (181, 136, 99)))
                 
-                # Draw 4x4 grid
                 sq_size = 100
                 for r in range(4):
                     for c in range(4):
@@ -1088,7 +1255,6 @@ class GameWindow:
                         pygame.draw.rect(self.screen, color, 
                                          (preview_rect.x + c * sq_size, preview_rect.y + r * sq_size, sq_size, sq_size))
                 
-                # Draw sample pieces
                 def draw_preview_piece(row, col, piece_type, color):
                     p = Piece(color, piece_type)
                     img = self.board_renderer.piece_images.get(p)
@@ -1118,6 +1284,16 @@ class GameWindow:
             self.message_overlay.draw(self.screen, self.small_font)
             pygame.display.flip()
             return
+        if self.state == "clock_selection":
+            title = self.title_font.render("Select Time Control", True, (255, 255, 255))
+            rect = title.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 - 250))
+            self.screen.blit(title, rect)
+            for b in self.clock_buttons:
+                b.draw(self.screen, self.button_font)
+            self.message_overlay.draw(self.screen, self.small_font)
+            pygame.display.flip()
+            return
+
         king_pos = None
         if self.game.is_in_check():
             for row in range(8):
@@ -1149,7 +1325,6 @@ class GameWindow:
             highlight_check=self.settings["highlight_check"]
         )
         
-        # Draw dragged piece
         if self.interaction.dragging and self.interaction.drag_piece:
             image = self.board_renderer.piece_images.get(self.interaction.drag_piece)
             if image:
@@ -1178,6 +1353,12 @@ class GameWindow:
                 self.screen.blit(temp, rect)
         
         if self.game.result and self.winning_dialog is None:
+            if self.mode_human_vs_ai:
+                try:
+                    LEARNING_SYSTEM.record_game(self.game.history, self.game.result, self.ai_color)
+                except Exception as e:
+                    print(f"Learning Error: {e}")
+
             self.winning_dialog = WinningDialog(
                 pygame.Rect(WINDOW_WIDTH // 2 - 150, WINDOW_HEIGHT // 2 - 100, 300, 200),
                 self.game.result,
@@ -1194,25 +1375,10 @@ class GameWindow:
         while self.running:
             self.handle_events()
             
-            # Check for AI move result
-            if not self.ai_move_queue.empty():
-                ai_move = self.ai_move_queue.get()
-                if ai_move:
-                    self.current_animation = MoveAnimation(self.board_renderer, self.game, ai_move)
-                    self.pending_move = (ai_move, True)
-                self.ai_thread = None
+            if self.state == "playing":
+                self.update_game_logic()
             
             self.draw()
-            if self.current_animation is not None and self.current_animation.is_done():
-                if self.pending_move is not None:
-                    move, is_ai = self.pending_move
-                    self.apply_move_with_sound(move)
-                    self.pending_move = None
-                    self.current_animation = None
-                    if not is_ai:
-                        self.maybe_start_ai_move()
-                else:
-                    self.current_animation = None
             self.clock.tick(60)
         pygame.quit()
 

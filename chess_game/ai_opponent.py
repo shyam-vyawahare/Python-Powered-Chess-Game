@@ -5,7 +5,10 @@ from typing import Optional, List, Tuple, Dict
 from .board import Board
 from .pieces import PieceType, piece_values, Piece
 from .utils import Color, Move
-from .game_logic import generate_legal_moves, make_move, is_in_check
+from .game_logic import generate_legal_moves, make_move, is_in_check, get_algebraic_notation
+from .learning import ChessLearningSystem
+
+LEARNING_SYSTEM = ChessLearningSystem()
 
 # Center squares for positional bonus
 center_squares = {(3, 3), (3, 4), (4, 3), (4, 4)}
@@ -27,9 +30,9 @@ class TimeLimitExceeded(Exception):
     pass
 
 AI_SETTINGS = {
-    "Easy": {"depth": 2, "randomness": 0.2, "time_limit": 0.5},
-    "Medium": {"depth": 3, "randomness": 0.0, "time_limit": 1.0},
-    "Hard": {"depth": 4, "randomness": 0.0, "time_limit": 2.0},
+    "Easy": {"depth": 1, "randomness": 0.2, "time_limit": 0.03},
+    "Medium": {"depth": 2, "randomness": 0.1, "time_limit": 0.08},
+    "Hard": {"depth": 3, "randomness": 0.0, "time_limit": 0.15},
 }
 
 # --- Piece-Square Tables ---
@@ -436,7 +439,8 @@ def alpha_beta(
     maximizing: bool,
     color_to_move: Color,
     root_color: Color,
-    end_time: float
+    end_time: float,
+    learning_mode: str = "standard"
 ) -> int:
     # 1. Check Time
     if time.time() > end_time:
@@ -479,9 +483,20 @@ def alpha_beta(
             clone = board.copy()
             make_move(clone, move)
             score = alpha_beta(
-                clone, depth - 1, alpha, beta, False, clone.current_player, root_color, end_time
+                clone, depth - 1, alpha, beta, False, clone.current_player, root_color, end_time, learning_mode
             )
             
+            # Apply Learning Influence
+            if learning_mode in ("standard", "full"):
+                # Blunder Avoidance
+                penalty = LEARNING_SYSTEM.get_blunder_penalty(board_key, move)
+                score -= penalty
+                
+            if learning_mode == "full":
+                # Tactical Awareness
+                bonus = LEARNING_SYSTEM.get_tactical_bonus(board_key, move)
+                score += bonus
+
             if score > value:
                 value = score
                 best_move = move
@@ -495,9 +510,20 @@ def alpha_beta(
             clone = board.copy()
             make_move(clone, move)
             score = alpha_beta(
-                clone, depth - 1, alpha, beta, True, clone.current_player, root_color, end_time
+                clone, depth - 1, alpha, beta, True, clone.current_player, root_color, end_time, learning_mode
             )
+
+            # Apply Learning Influence
+            if learning_mode in ("standard", "full"):
+                # Blunder Avoidance (Penalty makes move worse for minimizer -> Higher score)
+                penalty = LEARNING_SYSTEM.get_blunder_penalty(board_key, move)
+                score += penalty
             
+            if learning_mode == "full":
+                 # Tactical Bonus (Makes move better for minimizer -> Lower score)
+                 bonus = LEARNING_SYSTEM.get_tactical_bonus(board_key, move)
+                 score -= bonus
+
             if score < value:
                 value = score
                 best_move = move
@@ -522,53 +548,76 @@ def choose_ai_move(
     color: Color,
     max_depth: int,
     randomness: float = 0.0,
-    time_limit: float = 1.0
+    time_limit: float = 0.1,
+    move_history: Optional[List[str]] = None
 ) -> Optional[Move]:
     """
-    Iterative Deepening Search with Time Limit.
+    Iterative Deepening Search with Strict Time Limit.
     """
+    start_time = time.time()
+    end_time = start_time + time_limit - 0.005 # 5ms buffer
+    
     moves = generate_legal_moves(board, color)
     if not moves:
         return None
         
+    # Fail-safe: Pick a random move immediately
+    best_move_so_far = random.choice(moves)
+
+    # 0. Opening Book Learning (Only if enough time)
+    if move_history is not None and len(move_history) < 20 and randomness < 0.5:
+        opening_move_str = LEARNING_SYSTEM.get_opening_move(move_history)
+        if opening_move_str:
+            for m in moves:
+                if get_algebraic_notation(board, m) == opening_move_str:
+                    return m
+        
     if len(moves) == 1:
         return moves[0]
 
-    # Filter Blunders (MANDATORY Check)
-    # Rejects moves that hang Queen/Rook or lead to immediate mate.
-    # This is a shallow safety net before the main search.
+    # Filter Blunders (Global Check)
     safe_moves = []
-    for move in moves:
-        if not is_obvious_blunder(board, move, color):
-            safe_moves.append(move)
+    try:
+        for move in moves:
+            if time.time() > end_time:
+                break
+            if not is_obvious_blunder(board, move, color):
+                safe_moves.append(move)
+    except:
+        pass
     
-    # If we have safe moves, only consider those.
-    # If all moves are blunders (e.g. forced mate), we keep original moves 
-    # and let the search find the best resistance.
     if safe_moves:
         moves = safe_moves
+        best_move_so_far = random.choice(moves)
 
-    start_time = time.time()
-    end_time = start_time + time_limit - TIME_BUFFER
-    
-    best_move = random.choice(moves) # Fallback
-    best_score_overall = -math.inf
+    # Determine Learning Mode
+    learning_mode = "minimal"
+    if max_depth >= 3:
+        learning_mode = "full"
+    elif max_depth >= 2:
+        learning_mode = "standard"
     
     # Iterative Deepening
-    for current_depth in range(1, max_depth + 1):
-        try:
-            best_score = -math.inf
-            current_best_move = None
+    try:
+        current_depth = 1
+        while current_depth <= max_depth:
+            if time.time() >= end_time:
+                break
+                
+            # Search
+            best_move_this_depth = None
+            best_score_this_depth = -math.inf
             
-            moves = order_moves(moves, board)
+            # Move Ordering
+            ordered_moves = order_moves(moves, board)
+            
             alpha = -math.inf
             beta = math.inf
             
-            # Root Search
-            for move in moves:
-                if time.time() > end_time:
+            for move in ordered_moves:
+                if time.time() >= end_time:
                     raise TimeLimitExceeded
-                
+                    
                 clone = board.copy()
                 make_move(clone, move)
                 
@@ -577,29 +626,27 @@ def choose_ai_move(
                     current_depth - 1, 
                     alpha, 
                     beta, 
-                    False, 
+                    False, # Next is minimizing for us
                     clone.current_player, 
                     color, 
-                    end_time
+                    end_time,
+                    learning_mode
                 )
                 
-                if score > best_score:
-                    best_score = score
-                    current_best_move = move
+                if score > best_score_this_depth:
+                    best_score_this_depth = score
+                    best_move_this_depth = move
                 
-                alpha = max(alpha, best_score)
-                
-            if current_best_move:
-                best_move = current_best_move
-                best_score_overall = best_score
-                
-        except TimeLimitExceeded:
-            break
+                alpha = max(alpha, score)
+                if alpha >= beta:
+                    break 
             
-    # Apply Randomness (Only for Easy)
-    if randomness > 0.0:
-         # Small chance to pick random move to simulate mistake
-         if random.random() < randomness:
-             return random.choice(moves)
-             
-    return best_move
+            if best_move_this_depth:
+                best_move_so_far = best_move_this_depth
+                
+            current_depth += 1
+            
+    except TimeLimitExceeded:
+        pass 
+        
+    return best_move_so_far
