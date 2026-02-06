@@ -54,7 +54,6 @@ pygame.draw = MagicMock()
 # Now import GameWindow
 from chess_game.gui.game_window import GameWindow, TURN_PLAYER, TURN_AI, TURN_LOCKED
 from chess_game.game_logic import Color, Move
-from chess_game.ai_opponent import AI_SETTINGS
 
 class TestGameWindowLogic(unittest.TestCase):
     def setUp(self):

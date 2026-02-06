@@ -60,6 +60,48 @@ class Board:
             for col in range(8):
                 yield row, col, self.grid[row][col]
 
+    def to_fen(self) -> str:
+        rows = []
+        for r in range(8):
+            empty_count = 0
+            row_str = ""
+            for c in range(8):
+                piece = self.grid[r][c]
+                if piece is None:
+                    empty_count += 1
+                else:
+                    if empty_count > 0:
+                        row_str += str(empty_count)
+                        empty_count = 0
+                    
+                    symbol = piece.kind.value
+                    if piece.color == Color.BLACK:
+                        symbol = symbol.lower()
+                    row_str += symbol
+            if empty_count > 0:
+                row_str += str(empty_count)
+            rows.append(row_str)
+            
+        board_fen = "/".join(rows)
+        
+        active = "w" if self.current_player == Color.WHITE else "b"
+        
+        castling = ""
+        if self.castling_rights[Color.WHITE]["K"]: castling += "K"
+        if self.castling_rights[Color.WHITE]["Q"]: castling += "Q"
+        if self.castling_rights[Color.BLACK]["K"]: castling += "k"
+        if self.castling_rights[Color.BLACK]["Q"]: castling += "q"
+        if not castling: castling = "-"
+        
+        ep = "-"
+        if self.en_passant_target:
+            r, c = self.en_passant_target
+            file = file_labels[c]
+            rank = 8 - r
+            ep = f"{file}{rank}"
+            
+        return f"{board_fen} {active} {castling} {ep} {self.halfmove_clock} {self.fullmove_number}"
+
     def board_key(self) -> str:
         rows = []
         for row in range(8):

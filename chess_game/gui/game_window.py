@@ -7,9 +7,9 @@ import queue
 import os
 import math
 from ..game_logic import Game
-from ..ai_opponent import choose_ai_move, AI_SETTINGS, clear_ai_cache, LEARNING_SYSTEM
-from ..utils import Color, Move, indices_to_square
-from ..pieces import PieceType, Piece
+from ..engine.lc0_engine import LC0Engine
+from ..utils import Color, Move, indices_to_square, square_to_indices, PieceType
+from ..pieces import Piece
 from .chess_board_ui import BoardRenderer, BOARD_SIZE, SQUARE_SIZE
 from .menu_handler import ButtonBar, Button
 from .dialogs import PromotionDialog, MessageOverlay, WinningDialog
@@ -24,6 +24,9 @@ TEXT_COLOR = (230, 230, 230)
 TURN_PLAYER = "player"
 TURN_AI = "ai"
 TURN_LOCKED = "locked"
+
+USEREVENT_AI_MOVE = pygame.USEREVENT + 1
+USEREVENT_HINT_READY = pygame.USEREVENT + 2
 
 class InteractionState:
     def __init__(self) -> None:
@@ -262,6 +265,18 @@ class GameWindow:
         self.create_settings_buttons()
         self.create_color_buttons()
         self.create_clock_buttons()
+        
+        # LC0 Engine
+        self.engine: Optional[LC0Engine] = None
+        self.ai_movetime = 100 # default Medium
+
+    def ensure_engine(self):
+        if self.engine is None:
+            try:
+                self.engine = LC0Engine()
+            except Exception as e:
+                print(f"Failed to initialize LC0: {e}")
+                self.message_overlay.show("Error: LC0 Engine failed!", frames=200)
 
     def _create_background(self) -> pygame.Surface:
         surface = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT))
@@ -526,11 +541,14 @@ class GameWindow:
 
     def apply_ai_settings(self) -> None:
         level = self.ai_level_names[self.ai_level_index]
-        settings = AI_SETTINGS.get(level, AI_SETTINGS["Medium"])
-        self.ai_depth = settings["depth"]
-        self.ai_randomness = settings["randomness"]
-        self.ai_time_limit = settings["time_limit"]
-
+        # Easy -> 50ms, Medium -> 100ms, Hard -> 200ms
+        if level == "Easy":
+            self.ai_movetime = 50
+        elif level == "Hard":
+            self.ai_movetime = 200
+        else: # Medium
+            self.ai_movetime = 100
+            
     def new_game(self) -> None:
         self.game = Game()
         self.board_renderer.invalid_flash_frames = 0
@@ -674,19 +692,23 @@ class GameWindow:
     def hint(self) -> None:
         if self.game.result:
             return
-        color = self.game.board.current_player
-        move = choose_ai_move(
-            self.game.board,
-            color,
-            max_depth=2,
-            randomness=0.0,
-            time_limit=0.2
-        )
-        if move is None:
-            self.message_overlay.show("No legal moves", frames=120)
+            
+        self.ensure_engine()
+        if not self.engine:
+            self.message_overlay.show("Engine not available", frames=120)
             return
-        self.interaction.hint_move = move
-        self.message_overlay.show("Suggested move " + self.move_text(move), frames=180)
+
+        self.message_overlay.show("Thinking...", frames=60)
+        
+        fen = self.game.board.to_fen()
+        # User requested 50ms for hints
+        movetime = 50 
+        
+        threading.Thread(
+            target=self.run_lc0_hint,
+            args=(fen, movetime),
+            daemon=True
+        ).start()
 
     def resign(self) -> None:
         if self.game.result:
@@ -857,40 +879,103 @@ class GameWindow:
             else:
                 self.turn_state = TURN_PLAYER
 
-    def run_ai_search(self, board_copy: Game, color: Color, depth: int, randomness: float, time_limit: float) -> None:
+    def run_lc0_hint(self, fen: str, movetime: int) -> None:
         try:
-            ai_move = choose_ai_move(
-                board_copy.board, 
-                color, 
-                depth, 
-                randomness, 
-                time_limit,
-                move_history=board_copy.move_log
-            )
-            self.ai_move_queue.put(ai_move)
+            if not self.engine:
+                return
+            best_move_str = self.engine.get_best_move(fen, movetime)
+            if best_move_str:
+                move = self._parse_engine_move(best_move_str)
+                if move:
+                    pygame.event.post(pygame.event.Event(USEREVENT_HINT_READY, move=move))
         except Exception as e:
-            print(f"AI Error: {e}")
-            self.ai_move_queue.put(None)
+            print(f"LC0 Hint Error: {e}")
+
+    def run_lc0_search(self, fen: str, movetime: int) -> None:
+        try:
+            # Check for engine
+            if not self.engine:
+                print("LC0 Engine not initialized")
+                return
+
+            best_move_str = self.engine.get_best_move(fen, movetime)
+            if best_move_str:
+                move = self._parse_engine_move(best_move_str)
+                if move:
+                    pygame.event.post(pygame.event.Event(USEREVENT_AI_MOVE, move=move))
+                else:
+                    print(f"Failed to parse move: {best_move_str}")
+            else:
+                print("Engine returned no move")
+        except Exception as e:
+            print(f"LC0 Error: {e}")
+
+    def _parse_engine_move(self, move_str: str) -> Optional[Move]:
+        if not move_str or len(move_str) < 4:
+            return None
+        
+        from_sq = move_str[:2]
+        to_sq = move_str[2:4]
+        promotion_char = move_str[4] if len(move_str) > 4 else None
+        
+        from_idx = square_to_indices(from_sq)
+        to_idx = square_to_indices(to_sq)
+        
+        if not from_idx or not to_idx:
+            return None
+            
+        from_r, from_c = from_idx
+        to_r, to_c = to_idx
+        
+        piece = self.game.board.get_piece(from_r, from_c)
+        if piece is None:
+            return None
+            
+        # Promotion
+        promotion = None
+        if promotion_char:
+            if promotion_char == 'q': promotion = PieceType.QUEEN
+            elif promotion_char == 'r': promotion = PieceType.ROOK
+            elif promotion_char == 'b': promotion = PieceType.BISHOP
+            elif promotion_char == 'n': promotion = PieceType.KNIGHT
+            
+        # Capture
+        target_piece = self.game.board.get_piece(to_r, to_c)
+        is_capture = target_piece is not None
+        
+        # En Passant
+        is_en_passant = False
+        if piece.kind == PieceType.PAWN and abs(to_c - from_c) == 1 and not is_capture:
+            # Diagonal move to empty square
+            is_en_passant = True
+            is_capture = True
+            
+        # Castling
+        is_castling = False
+        if piece.kind == PieceType.KING and abs(to_c - from_c) > 1:
+            is_castling = True
+            
+        return Move(from_r, from_c, to_r, to_c, promotion, is_castling, is_en_passant)
 
     def trigger_ai_move(self) -> None:
         if not self.mode_human_vs_ai or self.game.result:
             return
-        if self.game.board.current_player is not self.ai_color:
+        if self.game.board.current_player != self.ai_color:
             return
         
+        self.ensure_engine()
+        if not self.engine:
+            return
+            
         # Don't show overlay if move is instant (0.1s), it just flickers.
         # self.message_overlay.show("AI thinking...", frames=180)
         
-        board_copy = Game()
-        board_copy.board = self.game.board.copy()
-        board_copy.move_log = list(self.game.move_log)
-        
-        limit = self.ai_time_limit
-        # Hard Cap Logic is now in ai_opponent.py, but we pass the limit here.
+        fen = self.game.board.to_fen()
+        movetime = self.ai_movetime
         
         self.ai_thread = threading.Thread(
-            target=self.run_ai_search,
-            args=(board_copy, self.ai_color, self.ai_depth, self.ai_randomness, limit)
+            target=self.run_lc0_search,
+            args=(fen, movetime)
         )
         self.ai_thread.daemon = True
         self.ai_thread.start()
@@ -920,22 +1005,8 @@ class GameWindow:
             self.ai_move_scheduled = False
             self.trigger_ai_move()
             
-        # 3. Handle AI Completion
-        if self.turn_state == TURN_AI:
-            try:
-                ai_move = self.ai_move_queue.get_nowait()
-                if ai_move:
-                    # Apply AI Move
-                    self.apply_move_and_schedule_ai(ai_move, animate=True)
-                    # Note: apply_move_and_schedule_ai will set TURN_LOCKED then TURN_PLAYER (since is_ai_needed will be False for AI's move)
-                    # Wait, let's check apply_move_and_schedule_ai logic for AI move.
-                    # If AI moved, is_ai_needed is False. So it sets TURN_PLAYER. Correct.
-                else:
-                    # AI failed or returned None (Stalemate/Mate detected by AI?)
-                    print("AI returned None")
-                    self.turn_state = TURN_PLAYER
-            except queue.Empty:
-                pass
+        # 3. Handle AI Completion (Now via USEREVENT)
+        # if self.turn_state == TURN_AI: ... handled in handle_events
                 
         # 4. Handle Clock
         current_time = pygame.time.get_ticks()
@@ -1116,6 +1187,15 @@ class GameWindow:
             if event.type == pygame.QUIT:
                 self.running = False
             
+            if event.type == USEREVENT_AI_MOVE:
+                if self.turn_state == TURN_AI:
+                    self.apply_move_and_schedule_ai(event.move, animate=True)
+            
+            if event.type == USEREVENT_HINT_READY:
+                move = event.move
+                self.interaction.hint_move = move
+                self.message_overlay.show("Suggested move " + self.move_text(move), frames=180)
+
             if self.winning_dialog is not None:
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     self.winning_dialog.handle_mouse_down(event.pos)
