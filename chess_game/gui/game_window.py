@@ -108,6 +108,16 @@ class MoveAnimation:
         return self.progress() >= 1.0
 
 class GameWindow:
+    AI_LEVELS = {
+        0: {"nodes": 100, "multipv": 3},   # Level 1 (Very Easy)
+        1: {"nodes": 300, "multipv": 3},   # Level 2
+        2: {"nodes": 700, "multipv": 2},   # Level 3
+        3: {"nodes": 1500, "multipv": 1},  # Level 4
+        4: {"nodes": 3000, "multipv": 1},  # Level 5
+        5: {"nodes": 6000, "multipv": 1},  # Level 6
+        6: {"nodes": 12000, "multipv": 1}  # Level 7 (Hard)
+    }
+
     def __init__(self) -> None:
         pygame.init()
         pygame.display.set_caption("Python Chess")
@@ -223,11 +233,8 @@ class GameWindow:
         self.mode_human_vs_ai = True
         self.human_color = Color.WHITE
         self.ai_color = Color.BLACK
-        self.ai_level_names = ["Easy", "Medium", "Hard"]
-        self.ai_level_index = 1
-        self.ai_depth = 3
-        self.ai_randomness = 0.1
-        self.ai_time_limit = 1.0
+        self.ai_level_names = [f"Level {i+1}" for i in range(7)]
+        self.ai_level_index = 3 # Default to Level 4 (Intermediate)
         self.ai_thread: Optional[threading.Thread] = None
         self.ai_move_queue: queue.Queue = queue.Queue()
         self.promotion_dialog: Optional[PromotionDialog] = None
@@ -308,10 +315,12 @@ class GameWindow:
             self.menu_buttons.append(
                 Button(rect, label, cb),
             )
-        diff_labels = ["Easy", "Medium", "Hard", "Back"]
+        
+        diff_labels = self.ai_level_names + ["Back"]
         self.difficulty_buttons = []
+        diff_start_y = WINDOW_HEIGHT // 2 - 200 # Start higher to fit all levels
         for i, label in enumerate(diff_labels):
-            rect = pygame.Rect(center_x - w // 2, start_y + i * (h + 10), w, h)
+            rect = pygame.Rect(center_x - w // 2, diff_start_y + i * (h + 10), w, h)
             if label == "Back":
                 cb = self.menu_back_to_main
             else:
@@ -540,14 +549,7 @@ class GameWindow:
             self.state = "menu"
 
     def apply_ai_settings(self) -> None:
-        level = self.ai_level_names[self.ai_level_index]
-        # Easy -> 50ms, Medium -> 100ms, Hard -> 200ms
-        if level == "Easy":
-            self.ai_movetime = 50
-        elif level == "Hard":
-            self.ai_movetime = 200
-        else: # Medium
-            self.ai_movetime = 100
+        pass
             
     def new_game(self) -> None:
         self.game = Game()
@@ -883,7 +885,7 @@ class GameWindow:
         try:
             if not self.engine:
                 return
-            best_move_str = self.engine.get_best_move(fen, movetime)
+            best_move_str = self.engine.get_best_move(fen, {'movetime': movetime})
             if best_move_str:
                 move = self._parse_engine_move(best_move_str)
                 if move:
@@ -891,14 +893,14 @@ class GameWindow:
         except Exception as e:
             print(f"LC0 Hint Error: {e}")
 
-    def run_lc0_search(self, fen: str, movetime: int) -> None:
+    def run_lc0_search(self, fen: str, limits: Dict, legal_moves: List[Move]) -> None:
         try:
             # Check for engine
             if not self.engine:
                 print("LC0 Engine not initialized")
                 return
 
-            best_move_str = self.engine.get_best_move(fen, movetime)
+            best_move_str = self.engine.get_best_move(fen, limits)
             if best_move_str:
                 move = self._parse_engine_move(best_move_str)
                 if move:
@@ -906,9 +908,27 @@ class GameWindow:
                 else:
                     print(f"Failed to parse move: {best_move_str}")
             else:
-                print("Engine returned no move")
+                print("Engine returned no move (timeout/crash?)")
+                # Attempt restart for next time
+                self.engine.restart()
+                # Fallback: Play random legal move to prevent freeze
+                if legal_moves:
+                    move = random.choice(legal_moves)
+                    print(f"Fallback to random move: {move}")
+                    pygame.event.post(pygame.event.Event(USEREVENT_AI_MOVE, move=move))
         except Exception as e:
             print(f"LC0 Error: {e}")
+            try:
+                if self.engine:
+                    self.engine.restart()
+            except:
+                pass
+            
+            # Fallback on exception
+            if legal_moves:
+                move = random.choice(legal_moves)
+                print(f"Fallback to random move (exception): {move}")
+                pygame.event.post(pygame.event.Event(USEREVENT_AI_MOVE, move=move))
 
     def _parse_engine_move(self, move_str: str) -> Optional[Move]:
         if not move_str or len(move_str) < 4:
@@ -967,15 +987,16 @@ class GameWindow:
         if not self.engine:
             return
             
-        # Don't show overlay if move is instant (0.1s), it just flickers.
-        # self.message_overlay.show("AI thinking...", frames=180)
+        # Show "AI thinking..."
+        self.message_overlay.show("AI thinking...", frames=300)
         
         fen = self.game.board.to_fen()
-        movetime = self.ai_movetime
+        limits = self.AI_LEVELS.get(self.ai_level_index, self.AI_LEVELS[3])
+        legal_moves = self.game.get_legal_moves()
         
         self.ai_thread = threading.Thread(
             target=self.run_lc0_search,
-            args=(fen, movetime)
+            args=(fen, limits, legal_moves)
         )
         self.ai_thread.daemon = True
         self.ai_thread.start()
@@ -1303,7 +1324,7 @@ class GameWindow:
             return
         if self.state == "difficulty":
             title = self.title_font.render("Select Difficulty", True, (255, 255, 255))
-            rect = title.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 - 150))
+            rect = title.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 - 260))
             self.screen.blit(title, rect)
             for b in self.difficulty_buttons:
                 b.draw(self.screen, self.button_font)
@@ -1460,6 +1481,10 @@ class GameWindow:
             
             self.draw()
             self.clock.tick(60)
+        
+        # Cleanup
+        if self.engine:
+            self.engine.quit()
         pygame.quit()
 
 

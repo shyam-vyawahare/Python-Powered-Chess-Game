@@ -3,13 +3,15 @@ import os
 import threading
 import queue
 import time
-from typing import Optional
+import random
+from typing import Optional, Dict, List
 
 class LC0Engine:
     def __init__(self):
         self.process: Optional[subprocess.Popen] = None
         self.output_queue = queue.Queue()
         self.is_running = False
+        self.is_searching = False
         self._reader_thread = None
         
         # Path Resolution
@@ -92,41 +94,129 @@ class LC0Engine:
                 continue
         return False
 
-    def new_game(self):
-        """Ready the engine for a new game."""
-        self.send_command("ucinewgame")
-        self.send_command("isready")
-        self._wait_for("readyok", timeout=2)
+    def restart(self):
+        """Restarts the engine process."""
+        self.quit()
+        time.sleep(0.2)
+        self._start_engine()
 
-    def get_best_move(self, fen: str, movetime_ms: int = 100) -> Optional[str]:
+    def _validate_fen(self, fen: str) -> bool:
+        """Basic FEN validation."""
+        parts = fen.split()
+        if len(parts) < 2: return False
+        ranks = parts[0].split('/')
+        if len(ranks) != 8: return False
+        if parts[1] not in ['w', 'b']: return False
+        return True
+
+    def get_best_move(self, fen: str, limits: Optional[Dict] = None) -> Optional[str]:
         """
         Sends position and go command, waits for bestmove.
-        This is a blocking call intended to be run in a thread.
+        Supported limits: 'movetime', 'nodes', 'multipv'
+        If 'multipv' > 1, it will pick a random move from the top N candidates (simulated 'noise').
         """
-        # Clear queue of old messages
-        with self.output_queue.mutex:
-            self.output_queue.queue.clear()
+        if self.is_searching:
+            print("Engine busy: Search already in progress")
+            return None
             
-        self.send_command(f"position fen {fen}")
-        self.send_command(f"go movetime {movetime_ms}")
+        if not self._validate_fen(fen):
+            print(f"Invalid FEN: {fen}")
+            return None
+
+        self.is_searching = True
         
-        # Wait for bestmove
-        # We can wait slightly longer than movetime_ms because of overhead
-        timeout = (movetime_ms / 1000.0) + 2.0 
-        start_time = time.time()
+        # Default limits
+        if isinstance(limits, int):
+            limits = {'movetime': limits}
+        limits = limits or {}
+        movetime = limits.get('movetime', 1000)
+        nodes = limits.get('nodes', None)
+        multipv = limits.get('multipv', 1)
         
-        while time.time() - start_time < timeout:
-            try:
-                line = self.output_queue.get(timeout=0.1)
-                if line.startswith("bestmove"):
-                    # Format: bestmove e2e4 [ponder ...]
-                    parts = line.split()
-                    if len(parts) >= 2:
-                        return parts[1]
-            except queue.Empty:
-                continue
+        candidates = {}  # Map multipv_id -> move
+        
+        try:
+            # Clear queue
+            with self.output_queue.mutex:
+                self.output_queue.queue.clear()
                 
-        return None
+            # Configure MultiPV if needed
+            if multipv > 1:
+                self.send_command(f"setoption name MultiPV value {multipv}")
+            else:
+                self.send_command("setoption name MultiPV value 1")
+            
+            # Build go command
+            cmd = "go"
+            if nodes:
+                cmd += f" nodes {nodes}"
+            else:
+                cmd += f" movetime {movetime}"
+                
+            self.send_command(f"position fen {fen}")
+            self.send_command(cmd)
+            
+            # Timeout safety
+            # If using nodes, we still need a fallback timeout.
+            # 12000 nodes is fast (usually <2s), but on slow CPU could be 10s.
+            # We set a generous timeout to prevent hanging.
+            safety_timeout = 30.0
+            if 'movetime' in limits:
+                # If movetime is strict, use it + buffer
+                safety_timeout = (limits['movetime'] / 1000.0) + 2.0
+            
+            start_time = time.time()
+            
+            while time.time() - start_time < safety_timeout:
+                try:
+                    line = self.output_queue.get(timeout=0.1)
+                    
+                    # Collect MultiPV candidates
+                    # Format: info depth X ... multipv N ... pv e2e4 ...
+                    if multipv > 1 and "pv" in line and "info" in line:
+                         parts = line.split()
+                         try:
+                             # Extract MultiPV ID
+                             mpv_id = 1
+                             if "multipv" in parts:
+                                 mpv_idx = parts.index("multipv")
+                                 if mpv_idx + 1 < len(parts):
+                                     mpv_id = int(parts[mpv_idx + 1])
+                             
+                             # Extract Move
+                             pv_index = parts.index("pv")
+                             if pv_index + 1 < len(parts):
+                                 m = parts[pv_index + 1]
+                                 candidates[mpv_id] = m
+                         except (ValueError, IndexError):
+                             pass
+
+                    if line.startswith("bestmove"):
+                        parts = line.split()
+                        best_move = parts[1] if len(parts) >= 2 else None
+                        
+                        if multipv > 1 and candidates:
+                             # Pick random from the latest Top N candidates
+                             # We have candidates[1] (best), candidates[2] (2nd best), etc.
+                             # If we asked for MultiPV 3, we should have keys 1, 2, 3.
+                             # But maybe only 1 and 2 if 3 is bad.
+                             available_moves = list(candidates.values())
+                             if available_moves:
+                                 # User said: "Easy -> pick from top 3"
+                                 # Our AI_LEVELS sets multipv=3 for Easy.
+                                 # So we just pick randomly from whatever we have.
+                                 return random.choice(available_moves)
+                        
+                        return best_move
+                        
+                except queue.Empty:
+                    continue
+            
+            print("Engine timeout.")
+            return None
+            
+        finally:
+            self.is_searching = False
 
     def quit(self):
         """Stops the engine process."""
