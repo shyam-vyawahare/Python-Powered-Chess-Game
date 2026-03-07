@@ -97,47 +97,55 @@ class WinningDialog:
         rect: pygame.Rect,
         title: str,
         on_restart: Callable[[], None],
-        on_menu: Callable[[], None]
+        on_menu: Callable[[], None],
+        on_save: Callable[[], None],
+        on_export: Callable[[], None],
     ) -> None:
         self.rect = rect
         self.title = title
         self.on_restart = on_restart
         self.on_menu = on_menu
+        self.on_save = on_save
+        self.on_export = on_export
         
-        # Calculate button rects
         w = 120
         h = 40
         spacing = 20
         total_w = 2 * w + spacing
         start_x = rect.centerx - total_w // 2
-        y = rect.centery + 10
+        y_top = self.rect.y + 90
+        y_bottom = y_top + h + 10
         
-        self.restart_rect = pygame.Rect(start_x, y, w, h)
-        self.menu_rect = pygame.Rect(start_x + w + spacing, y, w, h)
+        self.restart_rect = pygame.Rect(start_x, y_top, w, h)
+        self.menu_rect = pygame.Rect(start_x + w + spacing, y_top, w, h)
+        self.save_rect = pygame.Rect(start_x, y_bottom, w, h)
+        self.export_rect = pygame.Rect(start_x + w + spacing, y_bottom, w, h)
         self.hover_restart = False
         self.hover_menu = False
+        self.hover_save = False
+        self.hover_export = False
 
     def draw(self, surface: pygame.Surface, font: pygame.font.Font) -> None:
-        # Overlay background (full screen dim)
         overlay = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
         overlay.fill((0, 0, 0, 180))
         surface.blit(overlay, (0, 0))
         
-        # Dialog box
         pygame.draw.rect(surface, (50, 50, 50), self.rect, border_radius=12)
         pygame.draw.rect(surface, (255, 255, 255), self.rect, 2, border_radius=12)
         
-        # Title
         title_surf = font.render(self.title, True, (255, 255, 255))
         title_rect = title_surf.get_rect(center=(self.rect.centerx, self.rect.y + 40))
         surface.blit(title_surf, title_rect)
         
-        # Buttons
         restart_color = (66, 224, 133) if self.hover_restart else (46, 204, 113)
         menu_color = (251, 96, 80) if self.hover_menu else (231, 76, 60)
+        save_color = (52, 152, 219) if self.hover_save else (41, 128, 185)
+        export_color = (155, 89, 182) if self.hover_export else (142, 68, 173)
         
         self._draw_button(surface, font, self.restart_rect, "Restart", restart_color)
         self._draw_button(surface, font, self.menu_rect, "Main Menu", menu_color)
+        self._draw_button(surface, font, self.save_rect, "Save", save_color)
+        self._draw_button(surface, font, self.export_rect, "Export PGN", export_color)
 
     def _draw_button(self, surface, font, rect, text, color):
         pygame.draw.rect(surface, color, rect, border_radius=8)
@@ -149,6 +157,8 @@ class WinningDialog:
     def handle_mouse_move(self, pos: Tuple[int, int]) -> None:
         self.hover_restart = self.restart_rect.collidepoint(pos)
         self.hover_menu = self.menu_rect.collidepoint(pos)
+        self.hover_save = self.save_rect.collidepoint(pos)
+        self.hover_export = self.export_rect.collidepoint(pos)
 
     def handle_mouse_down(self, pos: Tuple[int, int]) -> bool:
         if self.restart_rect.collidepoint(pos):
@@ -156,5 +166,11 @@ class WinningDialog:
             return True
         if self.menu_rect.collidepoint(pos):
             self.on_menu()
+            return True
+        if self.save_rect.collidepoint(pos):
+            self.on_save()
+            return True
+        if self.export_rect.collidepoint(pos):
+            self.on_export()
             return True
         return False

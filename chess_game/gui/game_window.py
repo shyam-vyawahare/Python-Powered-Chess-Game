@@ -6,6 +6,8 @@ import threading
 import queue
 import os
 import math
+import json
+from datetime import datetime
 from ..game_logic import Game
 from ..engine.lc0_engine import LC0Engine
 from ..utils import Color, Move, indices_to_square, square_to_indices, PieceType
@@ -107,6 +109,122 @@ class MoveAnimation:
     def is_done(self) -> bool:
         return self.progress() >= 1.0
 
+class ImprovedMoveHistoryPanel:
+    def __init__(self, x: int, y: int, w: int, h: int) -> None:
+        self.x = x
+        self.y = y
+        self.w = w
+        self.h = h
+        self.scroll = 0
+        self.auto = True
+
+    def set_rect(self, x: int, y: int, w: int, h: int) -> None:
+        self.x = x
+        self.y = y
+        self.w = w
+        self.h = h
+
+    def draw(self, screen: pygame.Surface, lines: List[str], font_title: pygame.font.Font, font_line: pygame.font.Font) -> None:
+        pygame.draw.rect(screen, (250, 250, 250), (self.x, self.y, self.w, self.h))
+        title = font_title.render(f"Moves ({len(lines)})", True, (0, 0, 0))
+        screen.blit(title, (self.x + 10, self.y + 10))
+        vis = (self.h - 50) // 20
+        if self.auto:
+            self.scroll = max(0, len(lines) - vis)
+        y = self.y + 40
+        end = min(self.scroll + vis, len(lines))
+        for i in range(self.scroll, end):
+            if i == len(lines) - 1:
+                pygame.draw.rect(screen, (255, 255, 200), (self.x + 5, y - 2, self.w - 10, 20))
+            text_surf = font_line.render(lines[i], True, (0, 0, 0))
+            screen.blit(text_surf, (self.x + 10, y))
+            y += 20
+
+    def handle_scroll(self, event: pygame.event.Event) -> None:
+        if event.type == pygame.MOUSEWHEEL:
+            self.auto = False
+            self.scroll = max(0, self.scroll - event.y)
+
+class GameSaver:
+    def __init__(self) -> None:
+        self.save_dir = "saved_games"
+        os.makedirs(self.save_dir, exist_ok=True)
+
+    def save_game(self, window: "GameWindow") -> str:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        moves: List[Dict[str, str]] = []
+        for i in range(1, len(window.game.history)):
+            mv = window.game.history[i].last_move
+            if mv is None:
+                continue
+            from_sq = indices_to_square(mv.from_row, mv.from_col)
+            to_sq = indices_to_square(mv.to_row, mv.to_col)
+            promo = mv.promotion.value if mv.promotion is not None else None
+            san = window.game.move_log[i - 1] if i - 1 < len(window.game.move_log) else ""
+            moves.append({"from": from_sq, "to": to_sq, "promotion": promo, "san": san})
+        meta = {
+            "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "mode": "two_player" if not window.mode_human_vs_ai else "single_player",
+            "difficulty": window.ai_level_names[window.ai_level_index] if window.mode_human_vs_ai else None,
+            "result": window.game.result,
+            "total_moves": len(moves)
+        }
+        data = {"metadata": meta, "moves": moves}
+        filepath = os.path.join(self.save_dir, f"game_{timestamp}.json")
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        return filepath
+
+    def list_saved_games(self) -> List[Dict[str, str]]:
+        games: List[Dict[str, str]] = []
+        for f in os.listdir(self.save_dir):
+            if f.endswith(".json"):
+                try:
+                    with open(os.path.join(self.save_dir, f), "r", encoding="utf-8") as file:
+                        d = json.load(file)
+                        games.append({"filename": f, "date": d.get("metadata", {}).get("date", ""), "result": d.get("metadata", {}).get("result", "")})
+                except Exception:
+                    pass
+        games.sort(key=lambda x: x["date"], reverse=True)
+        return games
+
+class PGNExporter:
+    def export(self, window: "GameWindow") -> str:
+        os.makedirs("pgn_exports", exist_ok=True)
+        filepath = os.path.join("pgn_exports", f"game_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pgn")
+        lines: List[str] = []
+        lines.append(f'[Event "Casual Game"]')
+        lines.append(f'[Date "{datetime.now().strftime("%Y.%m.%d")}"]')
+        white_name = "Player"
+        black_name = "Player 2" if not window.mode_human_vs_ai else f'LC0 {window.ai_level_names[window.ai_level_index]}'
+        lines.append(f'[White "{white_name}"]')
+        lines.append(f'[Black "{black_name}"]')
+        result = "1/2-1/2"
+        if window.game.result:
+            if "White wins" in window.game.result:
+                result = "1-0"
+            elif "Black wins" in window.game.result:
+                result = "0-1"
+        lines.append(f'[Result "{result}"]')
+        lines.append("")
+        body = ""
+        formatted_lines: List[str] = []
+        for i in range(0, len(window.game.move_log), 2):
+            move_num = i // 2 + 1
+            white_move = window.game.move_log[i]
+            if i + 1 < len(window.game.move_log):
+                black_move = window.game.move_log[i + 1]
+                formatted_lines.append(f"{move_num}. {white_move} {black_move}")
+            else:
+                formatted_lines.append(f"{move_num}. {white_move}")
+        for idx, line in enumerate(formatted_lines):
+            body += line + " "
+            if (idx + 1) % 8 == 0:
+                body += "\n"
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n" + body.strip() + ("\n" if not body.endswith("\n") else ""))
+        return filepath
+
 class GameWindow:
     AI_LEVELS = {
         0: {"nodes": 100, "multipv": 3},   # Level 1 (Very Easy)
@@ -134,6 +252,13 @@ class GameWindow:
         self.message_overlay = MessageOverlay(
             pygame.Rect(0, WINDOW_HEIGHT - 40, WINDOW_WIDTH, 30),
         )
+        self.saver = GameSaver()
+        self.exporter = PGNExporter()
+        panel_x = BOARD_SIZE + 80 + 10
+        panel_y = (WINDOW_HEIGHT - BOARD_SIZE) // 2 + 220
+        panel_w = WINDOW_WIDTH - panel_x - 50
+        panel_h = BOARD_SIZE - 230
+        self.history_panel = ImprovedMoveHistoryPanel(panel_x, panel_y, panel_w, panel_h)
         
         # Asset Paths
         self.base_dir = Path(__file__).resolve().parent
@@ -302,11 +427,12 @@ class GameWindow:
         start_y = WINDOW_HEIGHT // 2 - 80
         w = 220
         h = 40
-        labels = ["Single Player", "Two Players", "Settings", "Quit"]
+        labels = ["Single Player", "Two Players", "Settings", "Load Last", "Quit"]
         callbacks = [
             self.menu_single_player,
             self.menu_two_players,
             self.menu_settings,
+            self.load_latest_game,
             self.quit_game,
         ]
         self.menu_buttons = []
@@ -719,6 +845,48 @@ class GameWindow:
         name = "White" if winner is Color.WHITE else "Black"
         self.game.result = f"{name} wins by resignation"
 
+    def save_current_game(self) -> None:
+        path = self.saver.save_game(self)
+        name = os.path.basename(path)
+        self.message_overlay.show(f"Saved: {name}", frames=180)
+
+    def export_current_game(self) -> None:
+        path = self.exporter.export(self)
+        name = os.path.basename(path)
+        self.message_overlay.show(f"Exported: {name}", frames=180)
+
+    def load_latest_game(self) -> None:
+        games = self.saver.list_saved_games()
+        if not games:
+            self.message_overlay.show("No saved games", frames=180)
+            return
+        entry = games[0]
+        filepath = os.path.join(self.saver.save_dir, entry["filename"])
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            meta = data.get("metadata", {})
+            moves = data.get("moves", [])
+            self.game = Game()
+            self.board_renderer.invalid_flash_frames = 0
+            self.interaction = InteractionState()
+            for m in moves:
+                uci = (m.get("from", "") + m.get("to", "")) + (m.get("promotion", "") or "")
+                move_obj = self._parse_engine_move(uci)
+                if move_obj:
+                    self.game.apply_move(move_obj)
+            mode = meta.get("mode")
+            if mode == "two_player":
+                self.mode_human_vs_ai = False
+            else:
+                self.mode_human_vs_ai = True
+            diff_label = meta.get("difficulty")
+            if diff_label and diff_label in self.ai_level_names:
+                self.ai_level_index = self.ai_level_names.index(diff_label)
+            self.state = "playing"
+            self.message_overlay.show("Loaded saved game", frames=180)
+        except Exception:
+            self.message_overlay.show("Load failed", frames=180)
     def move_text(self, move: Move) -> str:
         start = indices_to_square(move.from_row, move.from_col)
         end = indices_to_square(move.to_row, move.to_col)
@@ -1049,7 +1217,9 @@ class GameWindow:
                             pygame.Rect(WINDOW_WIDTH//2 - 150, WINDOW_HEIGHT//2 - 100, 300, 200),
                             "Black wins on time!",
                             self.restart_game,
-                            self.return_to_menu
+                            self.return_to_menu,
+                            self.save_current_game,
+                            self.export_current_game
                         )
                 else:
                     self.black_time -= dt
@@ -1060,7 +1230,9 @@ class GameWindow:
                             pygame.Rect(WINDOW_WIDTH//2 - 150, WINDOW_HEIGHT//2 - 100, 300, 200),
                             "White wins on time!",
                             self.restart_game,
-                            self.return_to_menu
+                            self.return_to_menu,
+                            self.save_current_game,
+                            self.export_current_game
                         )
 
     def draw_side_panel(self) -> None:
@@ -1179,12 +1351,7 @@ class GameWindow:
         
         y += 10
         
-        # 6. Move Log
-        text = self.side_font.render("Moves:", True, TEXT_COLOR)
-        self.screen.blit(text, (panel_rect.x + 10, y))
-        y += 22
-        
-        formatted_lines = []
+        formatted_lines: List[str] = []
         for i in range(0, len(self.game.move_log), 2):
             move_num = i // 2 + 1
             white_move = self.game.move_log[i]
@@ -1193,15 +1360,12 @@ class GameWindow:
                 formatted_lines.append(f"{move_num}. {white_move} {black_move}")
             else:
                 formatted_lines.append(f"{move_num}. {white_move}")
-                
-        max_lines = 8 # Reduced lines to fit clock
-        start_idx = max(0, len(formatted_lines) - max_lines)
-        display_lines = formatted_lines[start_idx:]
-        
-        for line in display_lines:
-            glyph = self.small_font.render(line, True, TEXT_COLOR)
-            self.screen.blit(glyph, (panel_rect.x + 10, y))
-            y += 18
+        hx = panel_rect.x + 10
+        hy = y
+        hw = panel_rect.width - 20
+        hh = panel_rect.bottom - y - 10
+        self.history_panel.set_rect(hx, hy, hw, hh)
+        self.history_panel.draw(self.screen, formatted_lines, self.side_font, self.small_font)
 
     def handle_events(self) -> None:
         for event in pygame.event.get():
@@ -1222,6 +1386,8 @@ class GameWindow:
                     self.winning_dialog.handle_mouse_down(event.pos)
                 elif event.type == pygame.MOUSEMOTION:
                     self.winning_dialog.handle_mouse_move(event.pos)
+                elif event.type == pygame.MOUSEWHEEL:
+                    self.history_panel.handle_scroll(event)
                 continue
 
             if event.type == pygame.KEYDOWN:
@@ -1288,6 +1454,9 @@ class GameWindow:
                 elif self.state == "clock_selection":
                     for b in self.clock_buttons:
                         b.handle_mouse_down(pos)
+            elif event.type == pygame.MOUSEWHEEL:
+                if self.state == "playing":
+                    self.history_panel.handle_scroll(event)
             elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
                 if self.state == "playing" and self.interaction.dragging:
                     pos = event.pos
@@ -1464,7 +1633,9 @@ class GameWindow:
                 pygame.Rect(WINDOW_WIDTH // 2 - 150, WINDOW_HEIGHT // 2 - 100, 300, 200),
                 self.game.result,
                 self.restart_game,
-                self.return_to_menu
+                self.return_to_menu,
+                self.save_current_game,
+                self.export_current_game
             )
             
         if self.winning_dialog is not None:
