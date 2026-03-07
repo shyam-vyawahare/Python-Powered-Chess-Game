@@ -551,6 +551,33 @@ class Game:
         key = self.board.board_key()
         return self.repetition.get(key, 0) >= 3
 
+    def can_claim_insufficient_material(self) -> bool:
+        white_minors = 0
+        black_minors = 0
+        white_major_or_pawn = 0
+        black_major_or_pawn = 0
+        for _, _, piece in self.board.iter_squares():
+            if piece is None:
+                continue
+            if piece.kind is PieceType.KING:
+                continue
+            if piece.kind in (PieceType.BISHOP, PieceType.KNIGHT):
+                if piece.color is Color.WHITE:
+                    white_minors += 1
+                else:
+                    black_minors += 1
+            elif piece.kind in (PieceType.QUEEN, PieceType.ROOK, PieceType.PAWN):
+                if piece.color is Color.WHITE:
+                    white_major_or_pawn += 1
+                else:
+                    black_major_or_pawn += 1
+        if white_major_or_pawn == 0 and black_major_or_pawn == 0:
+            if white_minors == 0 and black_minors == 0:
+                return True
+            if (white_minors <= 1 and black_minors == 0) or (black_minors <= 1 and white_minors == 0):
+                return True
+        return False
+
     def apply_move(self, move: Move) -> bool:
         color = self.board.current_player
         legal_moves = self.get_legal_moves()
@@ -591,6 +618,9 @@ class Game:
             return
         if self.can_claim_threefold_draw():
             self.result = "Draw by threefold repetition"
+            return
+        if self.can_claim_insufficient_material():
+            self.result = "Draw by insufficient material"
             return
 
     def undo_last_move(self) -> bool:

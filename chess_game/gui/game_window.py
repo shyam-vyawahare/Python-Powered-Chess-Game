@@ -8,13 +8,18 @@ import os
 import math
 import json
 from datetime import datetime
+try:
+    import pyperclip
+    _HAS_PYPERCLIP = True
+except Exception:
+    _HAS_PYPERCLIP = False
 from ..game_logic import Game
 from ..engine.lc0_engine import LC0Engine
 from ..utils import Color, Move, indices_to_square, square_to_indices, PieceType
 from ..pieces import Piece
 from .chess_board_ui import BoardRenderer, BOARD_SIZE, SQUARE_SIZE
 from .menu_handler import ButtonBar, Button
-from .dialogs import PromotionDialog, MessageOverlay, WinningDialog
+from .dialogs import PromotionDialog, MessageOverlay, WinningDialog, SimplePopup
 
 
 WINDOW_WIDTH = 1024
@@ -150,27 +155,72 @@ class GameSaver:
         self.save_dir = "saved_games"
         os.makedirs(self.save_dir, exist_ok=True)
 
-    def save_game(self, window: "GameWindow") -> str:
+    def save_game(self, window: "GameWindow", status: str = "incomplete") -> str:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        moves: List[Dict[str, str]] = []
-        for i in range(1, len(window.game.history)):
-            mv = window.game.history[i].last_move
-            if mv is None:
-                continue
-            from_sq = indices_to_square(mv.from_row, mv.from_col)
-            to_sq = indices_to_square(mv.to_row, mv.to_col)
-            promo = mv.promotion.value if mv.promotion is not None else None
-            san = window.game.move_log[i - 1] if i - 1 < len(window.game.move_log) else ""
-            moves.append({"from": from_sq, "to": to_sq, "promotion": promo, "san": san})
-        meta = {
-            "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "mode": "two_player" if not window.mode_human_vs_ai else "single_player",
-            "difficulty": window.ai_level_names[window.ai_level_index] if window.mode_human_vs_ai else None,
-            "result": window.game.result,
-            "total_moves": len(moves)
+        filename = f"game_{timestamp}.json"
+
+        res = "Incomplete game"
+        if window.game.result:
+            if "White wins" in window.game.result:
+                res = "White won"
+            elif "Black wins" in window.game.result:
+                res = "Black won"
+            elif "Draw" in window.game.result:
+                res = "Draw"
+        if status == "completed" and res == "Incomplete game":
+            res = "Draw"
+
+        # Move pairs for display, also include uci for precise resume
+        move_pairs: List[Dict[str, Optional[str]]] = []
+        for i in range(0, len(window.game.move_log), 2):
+            number = i // 2 + 1
+            white = window.game.move_log[i]
+            black = window.game.move_log[i + 1] if i + 1 < len(window.game.move_log) else None
+            entry: Dict[str, Optional[str]] = {"number": number, "white": white, "black": black}
+            # Attach UCI if available via history
+            if i + 1 < len(window.game.history):
+                mv = window.game.history[i + 1].last_move
+                if mv:
+                    uci_w = indices_to_square(mv.from_row, mv.from_col) + indices_to_square(mv.to_row, mv.to_col)
+                    if mv.promotion:
+                        uci_w += mv.promotion.value.lower()
+                    entry["uci_white"] = uci_w
+            if i + 2 < len(window.game.history):
+                mvb = window.game.history[i + 2].last_move
+                if mvb:
+                    uci_b = indices_to_square(mvb.from_row, mvb.from_col) + indices_to_square(mvb.to_row, mvb.to_col)
+                    if mvb.promotion:
+                        uci_b += mvb.promotion.value.lower()
+                    entry["uci_black"] = uci_b
+            move_pairs.append(entry)
+
+        # Board grid snapshot
+        board_grid: List[List[Optional[Dict[str, str]]]] = []
+        for r in range(8):
+            row_data: List[Optional[Dict[str, str]]] = []
+            for c in range(8):
+                piece = window.game.board.get_piece(r, c)
+                if piece is None:
+                    row_data.append(None)
+                else:
+                    row_data.append({"type": piece.kind.value, "color": piece.color.value})
+                # has_moved is omitted for simplicity
+            board_grid.append(row_data)
+
+        data = {
+            "metadata": {
+                "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "mode": "two_player" if not window.mode_human_vs_ai else "single_player",
+                "difficulty": window.ai_level_names[window.ai_level_index] if window.mode_human_vs_ai else None,
+                "status": status,
+                "result": res,
+                "moves": len(move_pairs),
+            },
+            "moves": move_pairs,
+            "board": board_grid,
         }
-        data = {"metadata": meta, "moves": moves}
-        filepath = os.path.join(self.save_dir, f"game_{timestamp}.json")
+
+        filepath = os.path.join(self.save_dir, filename)
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
         return filepath
@@ -182,16 +232,26 @@ class GameSaver:
                 try:
                     with open(os.path.join(self.save_dir, f), "r", encoding="utf-8") as file:
                         d = json.load(file)
-                        games.append({"filename": f, "date": d.get("metadata", {}).get("date", ""), "result": d.get("metadata", {}).get("result", "")})
+                        meta = d.get("metadata", {})
+                        games.append({
+                            "filename": f,
+                            "date": meta.get("date", ""),
+                            "result": meta.get("result", ""),
+                            "moves": str(meta.get("moves", 0)),
+                        })
                 except Exception:
                     pass
         games.sort(key=lambda x: x["date"], reverse=True)
         return games
 
+    def load_game(self, filename: str) -> Dict:
+        filepath = os.path.join(self.save_dir, filename)
+        with open(filepath, "r", encoding="utf-8") as f:
+            return json.load(f)
+
 class PGNExporter:
-    def export(self, window: "GameWindow") -> str:
+    def generate(self, window: "GameWindow") -> str:
         os.makedirs("pgn_exports", exist_ok=True)
-        filepath = os.path.join("pgn_exports", f"game_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pgn")
         lines: List[str] = []
         lines.append(f'[Event "Casual Game"]')
         lines.append(f'[Date "{datetime.now().strftime("%Y.%m.%d")}"]')
@@ -221,8 +281,13 @@ class PGNExporter:
             body += line + " "
             if (idx + 1) % 8 == 0:
                 body += "\n"
+        return "\n".join(lines) + "\n" + body.strip() + ("\n" if not body.endswith("\n") else "")
+
+    def export(self, window: "GameWindow") -> str:
+        pgn = self.generate(window)
+        filepath = os.path.join("pgn_exports", f"game_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pgn")
         with open(filepath, "w", encoding="utf-8") as f:
-            f.write("\n".join(lines) + "\n" + body.strip() + ("\n" if not body.endswith("\n") else ""))
+            f.write(pgn)
         return filepath
 
 class GameWindow:
@@ -348,6 +413,7 @@ class GameWindow:
         self.button_bar.add_button("Undo", self.undo_move)
         self.button_bar.add_button("Hint", self.hint)
         self.button_bar.add_button("Settings", self.menu_settings)
+        self.button_bar.add_button("Save", lambda: self.manual_save())
         
         self.btn_main_menu = Button(
             pygame.Rect(WINDOW_WIDTH - 160, button_y, 120, 40),
@@ -364,9 +430,13 @@ class GameWindow:
         self.ai_move_queue: queue.Queue = queue.Queue()
         self.promotion_dialog: Optional[PromotionDialog] = None
         self.winning_dialog: Optional[WinningDialog] = None
+        self.pgn_popup: Optional[SimplePopup] = None
         self.current_animation: Optional[MoveAnimation] = None
         self.pending_move: Optional[Tuple[Move, bool]] = None
         self.state = "menu"
+        self.review_mode = False
+        self.review_moves: List[Move] = []
+        self.review_index = 0
         self.settings = {
             "theme": "Green",
             "sound_move": True,
@@ -427,12 +497,12 @@ class GameWindow:
         start_y = WINDOW_HEIGHT // 2 - 80
         w = 220
         h = 40
-        labels = ["Single Player", "Two Players", "Settings", "Load Last", "Quit"]
+        labels = ["Single Player", "Two Players", "Settings", "Game History", "Quit"]
         callbacks = [
             self.menu_single_player,
             self.menu_two_players,
             self.menu_settings,
-            self.load_latest_game,
+            self.menu_history,
             self.quit_game,
         ]
         self.menu_buttons = []
@@ -683,6 +753,7 @@ class GameWindow:
         self.interaction = InteractionState()
         self.current_animation = None
         self.pending_move = None
+        self._auto_saved = False
         self.message_overlay.show("New game started", frames=120)
         
         if self.time_control:
@@ -709,6 +780,12 @@ class GameWindow:
         self.last_state = self.state
         self.state = "settings"
         self.update_settings_buttons()
+    
+    def menu_history(self) -> None:
+        self.state = "history"
+        self.history_scroll = 0
+        self.history_entries = self.saver.list_saved_games()
+        self.history_row_rects: List[Tuple[pygame.Rect, str]] = []
 
     def menu_back_to_main(self) -> None:
         if hasattr(self, 'last_state') and self.last_state == "playing":
@@ -785,9 +862,18 @@ class GameWindow:
         self.winning_dialog = None
 
     def quit_game(self) -> None:
+        if not self.game.result and len(self.game.move_log) > 0:
+            try:
+                self.saver.save_game(self, status="incomplete")
+                self.message_overlay.show("Incomplete game saved", frames=120)
+            except Exception:
+                pass
         self.running = False
 
     def undo_move(self) -> None:
+        if getattr(self, "review_mode", False):
+            self.message_overlay.show("Review mode: use arrow keys", frames=120)
+            return
         if self.ai_thread is not None and self.ai_thread.is_alive():
             self.message_overlay.show("Cannot undo while AI is thinking", frames=120)
             return
@@ -846,51 +932,139 @@ class GameWindow:
         self.game.result = f"{name} wins by resignation"
 
     def save_current_game(self) -> None:
-        path = self.saver.save_game(self)
+        status = "completed" if self.game.result else "incomplete"
+        path = self.saver.save_game(self, status=status)
         name = os.path.basename(path)
         self.message_overlay.show(f"Saved: {name}", frames=180)
 
-    def export_current_game(self) -> None:
-        path = self.exporter.export(self)
-        name = os.path.basename(path)
-        self.message_overlay.show(f"Exported: {name}", frames=180)
-
-    def load_latest_game(self) -> None:
-        games = self.saver.list_saved_games()
-        if not games:
-            self.message_overlay.show("No saved games", frames=180)
+    def manual_save(self) -> None:
+        if len(self.game.move_log) == 0:
+            self.message_overlay.show("Nothing to save", frames=120)
             return
-        entry = games[0]
-        filepath = os.path.join(self.saver.save_dir, entry["filename"])
-        try:
-            with open(filepath, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            meta = data.get("metadata", {})
-            moves = data.get("moves", [])
-            self.game = Game()
-            self.board_renderer.invalid_flash_frames = 0
-            self.interaction = InteractionState()
-            for m in moves:
-                uci = (m.get("from", "") + m.get("to", "")) + (m.get("promotion", "") or "")
-                move_obj = self._parse_engine_move(uci)
-                if move_obj:
-                    self.game.apply_move(move_obj)
-            mode = meta.get("mode")
-            if mode == "two_player":
-                self.mode_human_vs_ai = False
-            else:
-                self.mode_human_vs_ai = True
-            diff_label = meta.get("difficulty")
-            if diff_label and diff_label in self.ai_level_names:
-                self.ai_level_index = self.ai_level_names.index(diff_label)
-            self.state = "playing"
-            self.message_overlay.show("Loaded saved game", frames=180)
-        except Exception:
-            self.message_overlay.show("Load failed", frames=180)
+        self.save_current_game()
+
+    def export_current_game(self) -> None:
+        self.open_pgn_popup()
+
+    def resume_from_save(self, data: Dict) -> None:
+        meta = data.get("metadata", {})
+        self.mode_human_vs_ai = meta.get("mode") != "two_player"
+        diff_label = meta.get("difficulty")
+        if diff_label and diff_label in self.ai_level_names:
+            self.ai_level_index = self.ai_level_names.index(diff_label)
+        self.game = Game()
+        self.board_renderer.invalid_flash_frames = 0
+        self.interaction = InteractionState()
+        self.review_mode = False
+        self.review_index = 0
+        board = data.get("board", [])
+        for r in range(8):
+            for c in range(8):
+                cell = board[r][c] if r < len(board) and c < len(board[r]) else None
+                if cell:
+                    pt_value = cell.get("type")
+                    color_value = cell.get("color")
+                    kind = None
+                    color = None
+                    if pt_value == "K": kind = PieceType.KING
+                    elif pt_value == "Q": kind = PieceType.QUEEN
+                    elif pt_value == "R": kind = PieceType.ROOK
+                    elif pt_value == "B": kind = PieceType.BISHOP
+                    elif pt_value == "N": kind = PieceType.KNIGHT
+                    elif pt_value == "P": kind = PieceType.PAWN
+                    if color_value == "white": color = Color.WHITE
+                    elif color_value == "black": color = Color.BLACK
+                    if kind and color:
+                        self.game.board.set_piece(r, c, Piece(color, kind))
+                else:
+                    self.game.board.set_piece(r, c, None)
+        # Reconstruct move_log from saved SAN pairs for display
+        san_pairs = data.get("moves", [])
+        self.game.move_log = []
+        for pair in san_pairs:
+            w = pair.get("white")
+            b = pair.get("black")
+            if w: self.game.move_log.append(w)
+            if b: self.game.move_log.append(b)
+        # Set current player based on parity
+        if len(self.game.move_log) % 2 == 0:
+            self.game.board.current_player = Color.WHITE
+        else:
+            self.game.board.current_player = Color.BLACK
+        if meta.get("status") == "completed":
+            self.game.result = meta.get("result")
+            self.review_mode = True
+            self._build_review_from_save(data)
+        else:
+            self.review_mode = False
     def move_text(self, move: Move) -> str:
         start = indices_to_square(move.from_row, move.from_col)
         end = indices_to_square(move.to_row, move.to_col)
         return start + " " + end
+
+    def _build_review_from_save(self, data: Dict) -> None:
+        self.review_moves = []
+        pairs = data.get("moves", [])
+        # Build UCI sequence
+        sequence: List[str] = []
+        for pair in pairs:
+            uci_w = pair.get("uci_white")
+            uci_b = pair.get("uci_black")
+            if uci_w:
+                sequence.append(uci_w)
+            if uci_b:
+                sequence.append(uci_b)
+        # Parse into Move objects starting from initial board
+        base_game = Game()
+        for uci in sequence:
+            move = self._parse_engine_move(uci)
+            if move and move in base_game.get_legal_moves():
+                base_game.apply_move(move)
+                self.review_moves.append(move)
+            else:
+                # Fallback: try parse again using current self.game state
+                mv = self._parse_engine_move(uci)
+                if mv:
+                    self.review_moves.append(mv)
+        self.review_index = len(self.review_moves)
+        self._apply_review_index()
+
+    def _apply_review_index(self) -> None:
+        self.game = Game()
+        self.board_renderer.invalid_flash_frames = 0
+        self.interaction = InteractionState()
+        applied = 0
+        while applied < self.review_index and applied < len(self.review_moves):
+            mv = self.review_moves[applied]
+            self.game.apply_move(mv)
+            applied += 1
+        self.game.last_move = self.review_moves[applied - 1] if applied > 0 else None
+
+    def review_previous_move(self) -> None:
+        if not self.review_mode:
+            return
+        if self.review_index > 0:
+            self.review_index -= 1
+            self._apply_review_index()
+
+    def review_next_move(self) -> None:
+        if not self.review_mode:
+            return
+        if self.review_index < len(self.review_moves):
+            self.review_index += 1
+            self._apply_review_index()
+
+    def review_home(self) -> None:
+        if not self.review_mode:
+            return
+        self.review_index = 0
+        self._apply_review_index()
+
+    def review_end(self) -> None:
+        if not self.review_mode:
+            return
+        self.review_index = len(self.review_moves)
+        self._apply_review_index()
 
     def compute_moves_from(self, row: int, col: int) -> Set[Tuple[int, int]]:
         result: Set[Tuple[int, int]] = set()
@@ -900,6 +1074,8 @@ class GameWindow:
         return result
 
     def handle_board_click(self, pos: Tuple[int, int], animate: bool = True) -> None:
+        if self.review_mode:
+            return
         if self.game.result:
             return
         if self.current_animation is not None:
@@ -1026,6 +1202,8 @@ class GameWindow:
             self.play_sound("move-self")
 
     def apply_move_and_schedule_ai(self, move: Move, animate: bool = True) -> None:
+        if getattr(self, "review_mode", False):
+            return
         if self.current_animation is not None:
             return
         if animate:
@@ -1300,6 +1478,11 @@ class GameWindow:
         text = self.side_font.render("Turn: " + turn_str, True, TEXT_COLOR)
         self.screen.blit(text, (panel_rect.x + 10, y))
         y += 24
+        if getattr(self, "review_mode", False):
+            total_pairs = (len(self.review_moves) + 1) // 2
+            current_pairs = (self.review_index + 1) // 2
+            mv_info = self.side_font.render(f"Move {current_pairs} / {total_pairs}", True, TEXT_COLOR)
+            self.screen.blit(mv_info, (panel_rect.x + panel_rect.width - 160, y - 24))
         
         # 4. Status
         status = "Active"
@@ -1370,6 +1553,11 @@ class GameWindow:
     def handle_events(self) -> None:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
+                if not self.game.result and len(self.game.move_log) > 0:
+                    try:
+                        self.saver.save_game(self, status="incomplete")
+                    except Exception:
+                        pass
                 self.running = False
             
             if event.type == USEREVENT_AI_MOVE:
@@ -1394,17 +1582,30 @@ class GameWindow:
                 if event.key == pygame.K_ESCAPE:
                     if self.state == "playing":
                         self.return_to_menu()
+                if self.state == "playing" and getattr(self, "review_mode", False):
+                    if event.key == pygame.K_LEFT:
+                        self.review_previous_move()
+                    elif event.key == pygame.K_RIGHT:
+                        self.review_next_move()
+                    elif event.key == pygame.K_HOME:
+                        self.review_home()
+                    elif event.key == pygame.K_END:
+                        self.review_end()
             elif event.type == pygame.MOUSEMOTION:
                 pos = event.pos
                 if self.state == "playing":
                     self.board_renderer.update_hover(pos)
                     self.button_bar.handle_mouse_move(pos)
                     self.btn_main_menu.handle_mouse_move(pos)
+                    if self.pgn_popup is not None:
+                        self.pgn_popup.handle_mouse_move(pos)
                     if self.interaction.dragging and self.interaction.selected:
                         pass
                 elif self.state == "menu":
                     for b in self.menu_buttons:
                         b.handle_mouse_move(pos)
+                elif self.state == "history":
+                    pass
                 elif self.state == "difficulty":
                     for b in self.difficulty_buttons:
                         b.handle_mouse_move(pos)
@@ -1422,6 +1623,9 @@ class GameWindow:
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 pos = event.pos
                 if self.state == "playing":
+                    if self.pgn_popup is not None:
+                        if self.pgn_popup.handle_mouse_down(pos):
+                            continue
                     if self.promotion_dialog is not None and self.interaction.awaiting_promotion:
                         if self.promotion_dialog.handle_mouse_down(pos):
                             continue
@@ -1440,6 +1644,19 @@ class GameWindow:
                 elif self.state == "menu":
                     for b in self.menu_buttons:
                         b.handle_mouse_down(pos)
+                elif self.state == "history":
+                    for rect, filename in self.history_row_rects:
+                        if rect.collidepoint(pos):
+                            if filename == "__BACK__":
+                                self.state = "menu"
+                                break
+                            try:
+                                data = self.saver.load_game(filename)
+                                self.resume_from_save(data)
+                                self.state = "playing"
+                                self.message_overlay.show("Loaded saved game", frames=180)
+                            except Exception:
+                                self.message_overlay.show("Load failed", frames=180)
                 elif self.state == "difficulty":
                     for b in self.difficulty_buttons:
                         b.handle_mouse_down(pos)
@@ -1457,6 +1674,8 @@ class GameWindow:
             elif event.type == pygame.MOUSEWHEEL:
                 if self.state == "playing":
                     self.history_panel.handle_scroll(event)
+                elif self.state == "history":
+                    self.history_scroll = max(0, self.history_scroll - event.y)
             elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
                 if self.state == "playing" and self.interaction.dragging:
                     pos = event.pos
@@ -1488,6 +1707,33 @@ class GameWindow:
                 
             for b in self.menu_buttons:
                 b.draw(self.screen, self.button_font)
+            self.message_overlay.draw(self.screen, self.small_font)
+            pygame.display.flip()
+            return
+        if self.state == "history":
+            self.screen.fill((40, 40, 40))
+            title = pygame.font.Font(None, 56).render("Game History", True, (255, 255, 255))
+            self.screen.blit(title, (50, 30))
+            y = 120
+            self.history_row_rects = []
+            games = self.history_entries
+            font = pygame.font.Font(None, 22)
+            for i in range(self.history_scroll, min(self.history_scroll + 6, len(games))):
+                g = games[i]
+                rect = pygame.Rect(50, y, 700, 70)
+                pygame.draw.rect(self.screen, (70, 70, 70), rect, border_radius=8)
+                self.screen.blit(font.render(g.get("date", ""), True, (200, 200, 200)), (70, y + 10))
+                info = f"{g.get('result','')} - {g.get('moves','0')} moves"
+                self.screen.blit(font.render(info, True, (180, 200, 120)), (70, y + 35))
+                load_btn = pygame.Rect(620, y + 15, 100, 40)
+                pygame.draw.rect(self.screen, (50, 150, 50), load_btn, border_radius=8)
+                self.screen.blit(font.render("Load", True, (255, 255, 255)), (650, y + 25))
+                self.history_row_rects.append((load_btn, g["filename"]))
+                y += 80
+            back_btn = pygame.Rect(50, y + 20, 140, 40)
+            pygame.draw.rect(self.screen, (100, 100, 100), back_btn, border_radius=8)
+            self.screen.blit(font.render("Back", True, (255, 255, 255)), (95, y + 30))
+            self.history_row_rects.append((back_btn, "__BACK__"))
             self.message_overlay.draw(self.screen, self.small_font)
             pygame.display.flip()
             return
@@ -1607,6 +1853,8 @@ class GameWindow:
         self.btn_main_menu.draw(self.screen, self.button_font)
         if self.promotion_dialog is not None and self.interaction.awaiting_promotion:
             self.promotion_dialog.draw(self.screen, self.side_font)
+        if self.pgn_popup is not None:
+            self.pgn_popup.draw(self.screen, self.button_font, self.small_font)
         self.message_overlay.draw(self.screen, self.small_font)
         if self.current_animation is not None:
             t = self.current_animation.progress()
@@ -1629,9 +1877,16 @@ class GameWindow:
                 except Exception as e:
                     print(f"Learning Error: {e}")
 
+            if not getattr(self, "_auto_saved", False):
+                try:
+                    self.saver.save_game(self, status="completed")
+                except Exception:
+                    pass
+                self._auto_saved = True
+
             self.winning_dialog = WinningDialog(
                 pygame.Rect(WINDOW_WIDTH // 2 - 150, WINDOW_HEIGHT // 2 - 100, 300, 200),
-                self.game.result,
+                self._result_title(self.game.result or ""),
                 self.restart_game,
                 self.return_to_menu,
                 self.save_current_game,
@@ -1642,6 +1897,46 @@ class GameWindow:
             self.winning_dialog.draw(self.screen, self.button_font)
 
         pygame.display.flip()
+
+    def _result_title(self, text: str) -> str:
+        low = text.lower()
+        if "white" in low and "win" in low:
+            return "White Wins"
+        if "black" in low and "win" in low:
+            return "Black Wins"
+        return "Draw"
+
+    def open_pgn_popup(self) -> None:
+        pgn = self.exporter.generate(self)
+        popup = SimplePopup(
+            pygame.Rect(WINDOW_WIDTH // 2 - 220, WINDOW_HEIGHT // 2 - 140, 440, 280),
+            "PGN Exported",
+            "Your game PGN is ready."
+        )
+        popup.add_button("Copy to Clipboard", lambda: self._copy_pgn(pgn))
+        popup.add_button("Save File", lambda: self._save_pgn_file())
+        popup.add_button("Close", lambda: self._close_pgn_popup())
+        self.pgn_popup = popup
+
+    def _copy_pgn(self, pgn: str) -> None:
+        try:
+            import pyperclip as _pc
+            _pc.copy(pgn)
+            self.message_overlay.show("PGN copied to clipboard", frames=180)
+        except Exception:
+            self.message_overlay.show("Clipboard not available", frames=180)
+
+    def _save_pgn_file(self) -> None:
+        try:
+            path = self.exporter.export(self)
+            name = os.path.basename(path)
+            self.message_overlay.show(f"PGN saved: {name}", frames=180)
+        except Exception:
+            self.message_overlay.show("Save failed", frames=180)
+        self.pgn_popup = None
+
+    def _close_pgn_popup(self) -> None:
+        self.pgn_popup = None
 
     def run(self) -> None:
         while self.running:

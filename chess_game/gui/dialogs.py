@@ -90,6 +90,50 @@ class MessageOverlay:
         rect = text.get_rect(center=self.rect.center)
         surface.blit(text, rect)
 
+class SimplePopup:
+    def __init__(self, rect: pygame.Rect, title: str, message: str) -> None:
+        self.rect = rect
+        self.title = title
+        self.message = message
+        self.buttons: List[Tuple[str, pygame.Rect, Callable[[], None]]] = []
+        self.hover: List[bool] = []
+
+    def add_button(self, label: str, callback: Callable[[], None]) -> None:
+        y = self.rect.y + 120 + len(self.buttons) * 50
+        btn_rect = pygame.Rect(self.rect.centerx - 120, y, 240, 40)
+        self.buttons.append((label, btn_rect, callback))
+        self.hover.append(False)
+
+    def draw(self, surface: pygame.Surface, font: pygame.font.Font, small_font: pygame.font.Font) -> None:
+        overlay = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 200))
+        surface.blit(overlay, (0, 0))
+        pygame.draw.rect(surface, (50, 50, 50), self.rect, border_radius=12)
+        pygame.draw.rect(surface, (255, 255, 255), self.rect, 2, border_radius=12)
+        title_surf = font.render(self.title, True, (255, 255, 255))
+        title_rect = title_surf.get_rect(center=(self.rect.centerx, self.rect.y + 40))
+        surface.blit(title_surf, title_rect)
+        msg = small_font.render(self.message, True, (220, 220, 220))
+        msg_rect = msg.get_rect(center=(self.rect.centerx, self.rect.y + 80))
+        surface.blit(msg, msg_rect)
+        for i, (label, rect, _) in enumerate(self.buttons):
+            color = (100, 160, 240) if self.hover[i] else (70, 130, 200)
+            pygame.draw.rect(surface, color, rect, border_radius=8)
+            pygame.draw.rect(surface, (255, 255, 255), rect, 1, border_radius=8)
+            txt = font.render(label, True, (255, 255, 255))
+            surface.blit(txt, txt.get_rect(center=rect.center))
+
+    def handle_mouse_move(self, pos: Tuple[int, int]) -> None:
+        for i, (_, rect, _) in enumerate(self.buttons):
+            self.hover[i] = rect.collidepoint(pos)
+
+    def handle_mouse_down(self, pos: Tuple[int, int]) -> bool:
+        for _, rect, cb in self.buttons:
+            if rect.collidepoint(pos):
+                cb()
+                return True
+        return False
+
 
 class WinningDialog:
     def __init__(

@@ -1,0 +1,231 @@
+{
+  "metadata": {
+    "date": "2026-03-07 23:23:07",
+    "mode": "two_player",
+    "difficulty": null,
+    "status": "completed",
+    "result": "White won",
+    "moves": 7
+  },
+  "moves": [
+    {
+      "number": 1,
+      "white": "e4",
+      "black": "e5",
+      "uci_white": "g1f3",
+      "uci_black": "g8e7"
+    },
+    {
+      "number": 2,
+      "white": "Nc3",
+      "black": "b6",
+      "uci_white": "f3g1",
+      "uci_black": "b8c6"
+    },
+    {
+      "number": 3,
+      "white": "Nf3",
+      "black": "Ne7",
+      "uci_white": "d1f3",
+      "uci_black": "c6a5"
+    },
+    {
+      "number": 4,
+      "white": "Ng1",
+      "black": "Nbc6",
+      "uci_white": "f1c4",
+      "uci_black": "a5b7"
+    },
+    {
+      "number": 5,
+      "white": "Qf3",
+      "black": "Na5",
+      "uci_white": "f3f7"
+    },
+    {
+      "number": 6,
+      "white": "Bc4",
+      "black": "Nb7"
+    },
+    {
+      "number": 7,
+      "white": "Qxf7",
+      "black": null
+    }
+  ],
+  "board": [
+    [
+      {
+        "type": "R",
+        "color": "black"
+      },
+      null,
+      {
+        "type": "B",
+        "color": "black"
+      },
+      {
+        "type": "Q",
+        "color": "black"
+      },
+      {
+        "type": "K",
+        "color": "black"
+      },
+      {
+        "type": "B",
+        "color": "black"
+      },
+      null,
+      {
+        "type": "R",
+        "color": "black"
+      }
+    ],
+    [
+      {
+        "type": "P",
+        "color": "black"
+      },
+      {
+        "type": "N",
+        "color": "black"
+      },
+      {
+        "type": "P",
+        "color": "black"
+      },
+      {
+        "type": "P",
+        "color": "black"
+      },
+      {
+        "type": "N",
+        "color": "black"
+      },
+      {
+        "type": "Q",
+        "color": "white"
+      },
+      {
+        "type": "P",
+        "color": "black"
+      },
+      {
+        "type": "P",
+        "color": "black"
+      }
+    ],
+    [
+      null,
+      {
+        "type": "P",
+        "color": "black"
+      },
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    [
+      null,
+      null,
+      null,
+      null,
+      {
+        "type": "P",
+        "color": "black"
+      },
+      null,
+      null,
+      null
+    ],
+    [
+      null,
+      null,
+      {
+        "type": "B",
+        "color": "white"
+      },
+      null,
+      {
+        "type": "P",
+        "color": "white"
+      },
+      null,
+      null,
+      null
+    ],
+    [
+      null,
+      null,
+      {
+        "type": "N",
+        "color": "white"
+      },
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    [
+      {
+        "type": "P",
+        "color": "white"
+      },
+      {
+        "type": "P",
+        "color": "white"
+      },
+      {
+        "type": "P",
+        "color": "white"
+      },
+      {
+        "type": "P",
+        "color": "white"
+      },
+      null,
+      {
+        "type": "P",
+        "color": "white"
+      },
+      {
+        "type": "P",
+        "color": "white"
+      },
+      {
+        "type": "P",
+        "color": "white"
+      }
+    ],
+    [
+      {
+        "type": "R",
+        "color": "white"
+      },
+      null,
+      {
+        "type": "B",
+        "color": "white"
+      },
+      null,
+      {
+        "type": "K",
+        "color": "white"
+      },
+      null,
+      {
+        "type": "N",
+        "color": "white"
+      },
+      {
+        "type": "R",
+        "color": "white"
+      }
+    ]
+  ]
+}

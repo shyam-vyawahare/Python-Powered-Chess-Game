@@ -1,0 +1,53 @@
+{
+  "metadata": {
+    "date": "2026-03-07 22:00:31",
+    "mode": "two_player",
+    "difficulty": null,
+    "result": "White wins by checkmate",
+    "total_moves": 7
+  },
+  "moves": [
+    {
+      "from": "e2",
+      "to": "e4",
+      "promotion": null,
+      "san": "e4"
+    },
+    {
+      "from": "e7",
+      "to": "e5",
+      "promotion": null,
+      "san": "e5"
+    },
+    {
+      "from": "d1",
+      "to": "f3",
+      "promotion": null,
+      "san": "Qf3"
+    },
+    {
+      "from": "b8",
+      "to": "c6",
+      "promotion": null,
+      "san": "Nc6"
+    },
+    {
+      "from": "f1",
+      "to": "c4",
+      "promotion": null,
+      "san": "Bc4"
+    },
+    {
+      "from": "h7",
+      "to": "h6",
+      "promotion": null,
+      "san": "h6"
+    },
+    {
+      "from": "f3",
+      "to": "f7",
+      "promotion": null,
+      "san": "Qxf7"
+    }
+  ]
+}
