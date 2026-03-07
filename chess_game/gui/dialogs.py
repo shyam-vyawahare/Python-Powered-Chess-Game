@@ -134,6 +134,195 @@ class SimplePopup:
                 return True
         return False
 
+class TextPopup:
+    def __init__(self, rect: pygame.Rect, title: str, text: str) -> None:
+        self.rect = rect
+        self.title = title
+        self.text = text
+        self.buttons: List[Tuple[str, pygame.Rect, Callable[[], None]]] = []
+        self.hover: List[bool] = []
+        self.scroll = 0
+
+    def add_button(self, label: str, callback: Callable[[], None]) -> None:
+        y = self.rect.bottom - 60
+        w = 140
+        spacing = 20
+        i = len(self.buttons)
+        start_x = self.rect.centerx - (w * 2 + spacing) // 2
+        btn_rect = pygame.Rect(start_x + i * (w + spacing), y, w, 40)
+        self.buttons.append((label, btn_rect, callback))
+        self.hover.append(False)
+
+    def draw(self, surface: pygame.Surface, font: pygame.font.Font, small_font: pygame.font.Font) -> None:
+        overlay = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 200))
+        surface.blit(overlay, (0, 0))
+        pygame.draw.rect(surface, (50, 50, 50), self.rect, border_radius=12)
+        pygame.draw.rect(surface, (255, 255, 255), self.rect, 2, border_radius=12)
+        title_surf = font.render(self.title, True, (255, 255, 255))
+        title_rect = title_surf.get_rect(center=(self.rect.centerx, self.rect.y + 30))
+        surface.blit(title_surf, title_rect)
+        box = pygame.Rect(self.rect.x + 16, self.rect.y + 60, self.rect.width - 32, self.rect.height - 130)
+        pygame.draw.rect(surface, (20, 20, 20), box, border_radius=8)
+        pygame.draw.rect(surface, (200, 200, 200), box, 1, border_radius=8)
+        clip = surface.subsurface(box).copy()
+        clip.fill((20, 20, 20))
+        y = -self.scroll
+        for line in self.text.splitlines():
+            line_surf = small_font.render(line, True, (240, 240, 240))
+            clip.blit(line_surf, (8, y))
+            y += line_surf.get_height() + 4
+        surface.blit(clip, box.topleft)
+        for i, (label, rect, _) in enumerate(self.buttons):
+            color = (100, 160, 240) if self.hover[i] else (70, 130, 200)
+            pygame.draw.rect(surface, color, rect, border_radius=8)
+            pygame.draw.rect(surface, (255, 255, 255), rect, 1, border_radius=8)
+            txt = font.render(label, True, (255, 255, 255))
+            surface.blit(txt, txt.get_rect(center=rect.center))
+
+    def handle_mouse_move(self, pos: Tuple[int, int]) -> None:
+        for i, (_, rect, _) in enumerate(self.buttons):
+            self.hover[i] = rect.collidepoint(pos)
+
+    def handle_mouse_down(self, pos: Tuple[int, int]) -> bool:
+        for _, rect, cb in self.buttons:
+            if rect.collidepoint(pos):
+                cb()
+                return True
+        return False
+
+    def handle_wheel(self, delta: int) -> None:
+        self.scroll = max(0, self.scroll - delta * 20)
+
+class InputPopup:
+    def __init__(self, rect: pygame.Rect, title: str, prompt: str) -> None:
+        self.rect = rect
+        self.title = title
+        self.prompt = prompt
+        self.text = ""
+        self.buttons: List[Tuple[str, pygame.Rect, Callable[[], None]]] = []
+        self.hover: List[bool] = []
+
+    def add_button(self, label: str, callback: Callable[[], None]) -> None:
+        y = self.rect.bottom - 60
+        w = 160
+        spacing = 20
+        count = len(self.buttons)
+        start_x = self.rect.centerx - (w * 2 + spacing) // 2
+        btn_rect = pygame.Rect(start_x + count * (w + spacing), y, w, 40)
+        self.buttons.append((label, btn_rect, callback))
+        self.hover.append(False)
+
+    def draw(self, surface: pygame.Surface, font: pygame.font.Font, small_font: pygame.font.Font) -> None:
+        overlay = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 200))
+        surface.blit(overlay, (0, 0))
+        pygame.draw.rect(surface, (50, 50, 50), self.rect, border_radius=12)
+        pygame.draw.rect(surface, (255, 255, 255), self.rect, 2, border_radius=12)
+        title_surf = font.render(self.title, True, (255, 255, 255))
+        title_rect = title_surf.get_rect(center=(self.rect.centerx, self.rect.y + 30))
+        surface.blit(title_surf, title_rect)
+        prompt_surf = small_font.render(self.prompt, True, (220, 220, 220))
+        surface.blit(prompt_surf, (self.rect.x + 20, self.rect.y + 70))
+        input_rect = pygame.Rect(self.rect.x + 20, self.rect.y + 100, self.rect.width - 40, 32)
+        pygame.draw.rect(surface, (20, 20, 20), input_rect, border_radius=6)
+        pygame.draw.rect(surface, (200, 200, 200), input_rect, 1, border_radius=6)
+        display_text = self.text.replace("\r", " ").replace("\n", " ")
+        text_surf = small_font.render(display_text, True, (255, 255, 255))
+        inner_width = input_rect.width - 16
+        text_w = text_surf.get_width()
+        overflow = text_w - inner_width
+        if overflow < 0:
+            overflow = 0
+        prev_clip = surface.get_clip()
+        surface.set_clip(input_rect)
+        surface.blit(text_surf, (input_rect.x + 8 - overflow, input_rect.y + 6))
+        surface.set_clip(prev_clip)
+        # Caret blink
+        try:
+            ticks = pygame.time.get_ticks()
+        except Exception:
+            ticks = 0
+        if (ticks // 500) % 2 == 0:
+            caret_x = input_rect.x + 8 + text_surf.get_width() - overflow + 2
+            caret_y = input_rect.y + 6
+            prev_clip = surface.get_clip()
+            surface.set_clip(input_rect)
+            pygame.draw.rect(surface, (255, 255, 255), pygame.Rect(caret_x, caret_y, 2, text_surf.get_height()))
+            surface.set_clip(prev_clip)
+        for i, (label, rect, _) in enumerate(self.buttons):
+            color = (90, 160, 90) if self.hover[i] else (70, 130, 70)
+            pygame.draw.rect(surface, color, rect, border_radius=8)
+            pygame.draw.rect(surface, (255, 255, 255), rect, 1, border_radius=8)
+            txt = font.render(label, True, (255, 255, 255))
+            surface.blit(txt, txt.get_rect(center=rect.center))
+
+    def handle_mouse_move(self, pos: Tuple[int, int]) -> None:
+        for i, (_, rect, _) in enumerate(self.buttons):
+            self.hover[i] = rect.collidepoint(pos)
+
+    def handle_mouse_down(self, pos: Tuple[int, int]) -> bool:
+        for _, rect, cb in self.buttons:
+            if rect.collidepoint(pos):
+                cb()
+                return True
+        return False
+
+    def handle_key(self, event: pygame.event.Event) -> None:
+        mods = getattr(event, "mod", pygame.key.get_mods())
+        if (event.key == pygame.K_v and (mods & pygame.KMOD_CTRL)) or (event.key == pygame.K_INSERT and (mods & pygame.KMOD_SHIFT)):
+            paste = ""
+            try:
+                import pygame.scrap as scrap
+                scrap.init()
+                data = scrap.get(scrap.SCRAP_TEXT)
+                if data:
+                    try:
+                        paste = data.decode("utf-8", errors="ignore")
+                    except Exception:
+                        paste = ""
+            except Exception:
+                try:
+                    import pyperclip
+                    paste = pyperclip.paste()
+                except Exception:
+                    try:
+                        import tkinter as tk
+                        r = tk.Tk()
+                        r.withdraw()
+                        try:
+                            paste = r.clipboard_get()
+                        except Exception:
+                            paste = ""
+                        r.destroy()
+                    except Exception:
+                        try:
+                            import ctypes
+                            CF_UNICODETEXT = 13
+                            user32 = ctypes.windll.user32
+                            kernel32 = ctypes.windll.kernel32
+                            if user32.OpenClipboard(0):
+                                h = user32.GetClipboardData(CF_UNICODETEXT)
+                                if h:
+                                    p = kernel32.GlobalLock(h)
+                                    if p:
+                                        try:
+                                            paste = ctypes.wstring_at(p)
+                                        finally:
+                                            kernel32.GlobalUnlock(h)
+                                user32.CloseClipboard()
+                        except Exception:
+                            paste = ""
+            if paste:
+                self.text += paste
+        elif event.key == pygame.K_BACKSPACE:
+            self.text = self.text[:-1]
+        elif event.key == pygame.K_RETURN:
+            pass
+        else:
+            if event.unicode and len(event.unicode) == 1:
+                self.text += event.unicode
+
 
 class WinningDialog:
     def __init__(

@@ -1,50 +1,84 @@
 {
   "metadata": {
-    "date": "2026-03-08 00:49:01",
+    "date": "2026-03-08 03:16:16",
     "mode": "two_player",
     "difficulty": null,
-    "status": "incomplete",
-    "result": "Incomplete game",
-    "moves": 4
+    "status": "completed",
+    "result": "White won",
+    "moves": 9
   },
   "moves": [
     {
       "number": 1,
       "white": "e4",
       "black": "e5",
-      "uci_white": "d4e5",
-      "uci_black": "d6e5"
+      "uci_white": "e2e4",
+      "uci_black": "e7e5"
     },
     {
       "number": 2,
-      "white": "Nc3",
-      "black": "b6"
+      "white": "d4",
+      "black": "d5",
+      "uci_white": "d2d4",
+      "uci_black": "d7d5"
     },
     {
       "number": 3,
-      "white": "d4",
-      "black": "d6"
+      "white": "Qd3",
+      "black": "Nc6",
+      "uci_white": "d1d3",
+      "uci_black": "b8c6"
     },
     {
       "number": 4,
-      "white": "dxe5",
-      "black": "dxe5"
+      "white": "Nf3",
+      "black": "exd4",
+      "uci_white": "g1f3",
+      "uci_black": "e5d4"
+    },
+    {
+      "number": 5,
+      "white": "Ng5",
+      "black": "a6",
+      "uci_white": "f3g5",
+      "uci_black": "a7a6"
+    },
+    {
+      "number": 6,
+      "white": "Ne6",
+      "black": "h6",
+      "uci_white": "g5e6",
+      "uci_black": "h7h6"
+    },
+    {
+      "number": 7,
+      "white": "Qa3",
+      "black": "Rb8",
+      "uci_white": "d3a3",
+      "uci_black": "a8b8"
+    },
+    {
+      "number": 8,
+      "white": "Be2",
+      "black": "Bd7",
+      "uci_white": "f1e2",
+      "uci_black": "c8d7"
+    },
+    {
+      "number": 9,
+      "white": "Qxf8",
+      "black": null,
+      "uci_white": "a3f8"
     }
   ],
   "board": [
     [
+      null,
       {
         "type": "R",
         "color": "black"
       },
-      {
-        "type": "N",
-        "color": "black"
-      },
-      {
-        "type": "B",
-        "color": "black"
-      },
+      null,
       {
         "type": "Q",
         "color": "black"
@@ -54,149 +88,155 @@
         "color": "black"
       },
       {
-        "type": "B",
-        "color": "black"
-      },
-      {
-        "type": "N",
-        "color": "black"
-      },
-      {
-        "type": "R",
-        "color": "black"
-      }
-    ],
-    [
-      {
-        "type": "P",
-        "color": "black"
-      },
-      null,
-      {
-        "type": "P",
-        "color": "black"
-      },
-      null,
-      null,
-      {
-        "type": "P",
-        "color": "black"
-      },
-      {
-        "type": "P",
-        "color": "black"
-      },
-      {
-        "type": "P",
-        "color": "black"
-      }
-    ],
-    [
-      null,
-      {
-        "type": "P",
-        "color": "black"
-      },
-      null,
-      null,
-      null,
-      null,
-      null,
-      null
-    ],
-    [
-      null,
-      null,
-      null,
-      null,
-      {
-        "type": "P",
-        "color": "black"
-      },
-      null,
-      null,
-      null
-    ],
-    [
-      null,
-      null,
-      null,
-      null,
-      {
-        "type": "P",
-        "color": "white"
-      },
-      null,
-      null,
-      null
-    ],
-    [
-      null,
-      null,
-      {
-        "type": "N",
-        "color": "white"
-      },
-      null,
-      null,
-      null,
-      null,
-      null
-    ],
-    [
-      {
-        "type": "P",
-        "color": "white"
-      },
-      {
-        "type": "P",
-        "color": "white"
-      },
-      {
-        "type": "P",
-        "color": "white"
-      },
-      null,
-      null,
-      {
-        "type": "P",
-        "color": "white"
-      },
-      {
-        "type": "P",
-        "color": "white"
-      },
-      {
-        "type": "P",
-        "color": "white"
-      }
-    ],
-    [
-      {
-        "type": "R",
-        "color": "white"
-      },
-      null,
-      {
-        "type": "B",
-        "color": "white"
-      },
-      {
         "type": "Q",
         "color": "white"
       },
       {
-        "type": "K",
-        "color": "white"
+        "type": "N",
+        "color": "black"
+      },
+      {
+        "type": "R",
+        "color": "black"
+      }
+    ],
+    [
+      null,
+      {
+        "type": "P",
+        "color": "black"
+      },
+      {
+        "type": "P",
+        "color": "black"
       },
       {
         "type": "B",
+        "color": "black"
+      },
+      null,
+      {
+        "type": "P",
+        "color": "black"
+      },
+      {
+        "type": "P",
+        "color": "black"
+      },
+      null
+    ],
+    [
+      {
+        "type": "P",
+        "color": "black"
+      },
+      null,
+      {
+        "type": "N",
+        "color": "black"
+      },
+      null,
+      {
+        "type": "N",
+        "color": "white"
+      },
+      null,
+      null,
+      {
+        "type": "P",
+        "color": "black"
+      }
+    ],
+    [
+      null,
+      null,
+      null,
+      {
+        "type": "P",
+        "color": "black"
+      },
+      null,
+      null,
+      null,
+      null
+    ],
+    [
+      null,
+      null,
+      null,
+      {
+        "type": "P",
+        "color": "black"
+      },
+      {
+        "type": "P",
+        "color": "white"
+      },
+      null,
+      null,
+      null
+    ],
+    [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    [
+      {
+        "type": "P",
+        "color": "white"
+      },
+      {
+        "type": "P",
+        "color": "white"
+      },
+      {
+        "type": "P",
+        "color": "white"
+      },
+      null,
+      {
+        "type": "B",
+        "color": "white"
+      },
+      {
+        "type": "P",
+        "color": "white"
+      },
+      {
+        "type": "P",
+        "color": "white"
+      },
+      {
+        "type": "P",
+        "color": "white"
+      }
+    ],
+    [
+      {
+        "type": "R",
         "color": "white"
       },
       {
         "type": "N",
         "color": "white"
       },
+      {
+        "type": "B",
+        "color": "white"
+      },
+      null,
+      {
+        "type": "K",
+        "color": "white"
+      },
+      null,
+      null,
       {
         "type": "R",
         "color": "white"

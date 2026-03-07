@@ -1,19 +1,23 @@
 {
   "metadata": {
-    "date": "2026-03-08 00:55:04",
+    "date": "2026-03-08 01:02:40",
     "mode": "two_player",
     "difficulty": null,
     "status": "incomplete",
     "result": "Incomplete game",
-    "moves": 1
+    "moves": 2
   },
   "moves": [
     {
       "number": 1,
       "white": "e4",
       "black": "d5",
-      "uci_white": "e2e4",
-      "uci_black": "d7d5"
+      "uci_white": "e4e5"
+    },
+    {
+      "number": 2,
+      "white": "e5",
+      "black": null
     }
   ],
   "board": [
@@ -100,7 +104,10 @@
         "type": "P",
         "color": "black"
       },
-      null,
+      {
+        "type": "P",
+        "color": "white"
+      },
       null,
       null,
       null
@@ -110,10 +117,7 @@
       null,
       null,
       null,
-      {
-        "type": "P",
-        "color": "white"
-      },
+      null,
       null,
       null,
       null

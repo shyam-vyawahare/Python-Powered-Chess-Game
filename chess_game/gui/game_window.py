@@ -2,24 +2,26 @@ from typing import Optional, Set, Tuple, List, Dict
 from pathlib import Path
 import pygame
 import random
+import re
 import threading
 import queue
 import os
 import math
 import json
 from datetime import datetime
+import ctypes
 try:
     import pyperclip
     _HAS_PYPERCLIP = True
 except Exception:
     _HAS_PYPERCLIP = False
-from ..game_logic import Game
+from ..game_logic import Game, get_algebraic_notation
 from ..engine.lc0_engine import LC0Engine
 from ..utils import Color, Move, indices_to_square, square_to_indices, PieceType
 from ..pieces import Piece
 from .chess_board_ui import BoardRenderer, BOARD_SIZE, SQUARE_SIZE
 from .menu_handler import ButtonBar, Button
-from .dialogs import PromotionDialog, MessageOverlay, WinningDialog, SimplePopup
+from .dialogs import PromotionDialog, MessageOverlay, WinningDialog, SimplePopup, InputPopup, TextPopup
 
 
 WINDOW_WIDTH = 1024
@@ -248,6 +250,16 @@ class GameSaver:
         filepath = os.path.join(self.save_dir, filename)
         with open(filepath, "r", encoding="utf-8") as f:
             return json.load(f)
+    
+    def delete_game(self, filename: str) -> bool:
+        try:
+            filepath = os.path.join(self.save_dir, filename)
+            if os.path.exists(filepath):
+                os.remove(filepath)
+                return True
+        except Exception:
+            pass
+        return False
 
 class PGNExporter:
     def generate(self, window: "GameWindow") -> str:
@@ -290,6 +302,51 @@ class PGNExporter:
             f.write(pgn)
         return filepath
 
+class PGNImporter:
+    def __init__(self) -> None:
+        self.import_dirs = ["pgn_exports", "pgn_imports"]
+        for d in self.import_dirs:
+            os.makedirs(d, exist_ok=True)
+
+    def list_pgn_files(self) -> List[Dict[str, str]]:
+        files: List[Dict[str, str]] = []
+        for d in self.import_dirs:
+            for f in os.listdir(d):
+                if f.lower().endswith(".pgn"):
+                    path = os.path.join(d, f)
+                    try:
+                        ts = datetime.fromtimestamp(os.path.getmtime(path)).strftime("%Y-%m-%d %H:%M:%S")
+                    except Exception:
+                        ts = ""
+                    files.append({"filename": f, "dir": d, "date": ts})
+        files.sort(key=lambda x: x["date"], reverse=True)
+        return files
+
+    def read_pgn(self, dir_name: str, filename: str) -> str:
+        path = os.path.join(dir_name, filename)
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+
+    def extract_san_moves(self, pgn_text: str) -> List[str]:
+        # Fast stripping of PGN tags and comments
+        body = re.sub(r"^\s*\[.*?\]\s*$", "", pgn_text, flags=re.MULTILINE)
+        body = re.sub(r"\{[^}]*\}", "", body)  # remove {...}
+        body = re.sub(r";.*$", "", body, flags=re.MULTILINE)  # remove ; to EOL
+        body = re.sub(r"\s+", " ", body)
+        tokens = body.split(" ")
+        san_moves: List[str] = []
+        for t in tokens:
+            if not t:
+                continue
+            if t.endswith(".") or t.endswith("..."):
+                continue
+            if t in ("1-0", "0-1", "1/2-1/2", "*"):
+                break
+            # Strip common annotations and check markers
+            t = t.rstrip("+#?!")
+            san_moves.append(t)
+        return san_moves
+
 class GameWindow:
     AI_LEVELS = {
         0: {"nodes": 100, "multipv": 3},   # Level 1 (Very Easy)
@@ -319,6 +376,7 @@ class GameWindow:
         )
         self.saver = GameSaver()
         self.exporter = PGNExporter()
+        self.importer = PGNImporter()
         panel_x = BOARD_SIZE + 80 + 10
         panel_y = (WINDOW_HEIGHT - BOARD_SIZE) // 2 + 220
         panel_w = WINDOW_WIDTH - panel_x - 50
@@ -497,12 +555,13 @@ class GameWindow:
         start_y = WINDOW_HEIGHT // 2 - 80
         w = 220
         h = 40
-        labels = ["Single Player", "Two Players", "Settings", "Game History", "Quit"]
+        labels = ["Single Player", "Two Players", "Settings", "Game History", "Load PGN", "Quit"]
         callbacks = [
             self.menu_single_player,
             self.menu_two_players,
             self.menu_settings,
             self.menu_history,
+            self.menu_pgn_history,
             self.quit_game,
         ]
         self.menu_buttons = []
@@ -753,6 +812,10 @@ class GameWindow:
         self.interaction = InteractionState()
         self.current_animation = None
         self.pending_move = None
+        self.review_mode = False
+        self.review_moves = []
+        self.review_index = 0
+        self.pgn_popup = None
         self._auto_saved = False
         self.message_overlay.show("New game started", frames=120)
         
@@ -785,7 +848,13 @@ class GameWindow:
         self.state = "history"
         self.history_scroll = 0
         self.history_entries = self.saver.list_saved_games()
-        self.history_row_rects: List[Tuple[pygame.Rect, str]] = []
+        self.history_row_rects: List[Tuple[pygame.Rect, str, str]] = []
+
+    def menu_pgn_history(self) -> None:
+        self.state = "pgn_history"
+        self.pgn_scroll = 0
+        self.pgn_entries = self.importer.list_pgn_files()
+        self.pgn_row_rects: List[Tuple[pygame.Rect, Dict[str, str], str]] = []
 
     def menu_back_to_main(self) -> None:
         if hasattr(self, 'last_state') and self.last_state == "playing":
@@ -848,6 +917,7 @@ class GameWindow:
         self.new_game()
         self.state = "playing"
         self.winning_dialog = None
+        self.pgn_popup = None
         
         # If AI is White, schedule it immediately
         if self.mode_human_vs_ai and self.game.board.current_player == self.ai_color:
@@ -860,6 +930,7 @@ class GameWindow:
         self.new_game()
         self.state = "menu"
         self.winning_dialog = None
+        self.pgn_popup = None
 
     def quit_game(self) -> None:
         if not self.game.result and len(self.game.move_log) > 0:
@@ -952,6 +1023,8 @@ class GameWindow:
         diff_label = meta.get("difficulty")
         if diff_label and diff_label in self.ai_level_names:
             self.ai_level_index = self.ai_level_names.index(diff_label)
+        self.pgn_popup = None
+        self.pgn_input_popup = None
         self.game = Game()
         self.board_renderer.invalid_flash_frames = 0
         self.interaction = InteractionState()
@@ -1016,17 +1089,28 @@ class GameWindow:
                 sequence.append(uci_b)
         # Parse into Move objects starting from initial board
         base_game = Game()
-        for uci in sequence:
-            move = self._parse_engine_move(uci)
-            if move and move in base_game.get_legal_moves():
-                base_game.apply_move(move)
-                self.review_moves.append(move)
-            else:
-                # Fallback: try parse again using current self.game state
-                mv = self._parse_engine_move(uci)
-                if mv:
-                    self.review_moves.append(mv)
-        self.review_index = len(self.review_moves)
+        if sequence:
+            for uci in sequence:
+                move = self._parse_uci_on_board(base_game.board, uci)
+                if move and move in base_game.get_legal_moves():
+                    base_game.apply_move(move)
+                    self.review_moves.append(move)
+        else:
+            # Fallback: reconstruct from saved SAN pairs
+            for pair in pairs:
+                for san in (pair.get("white"), pair.get("black")):
+                    if not san:
+                        continue
+                    candidates = base_game.get_legal_moves()
+                    matched = None
+                    for m in candidates:
+                        if get_algebraic_notation(base_game.board, m) == san:
+                            matched = m
+                            break
+                    if matched:
+                        base_game.apply_move(matched)
+                        self.review_moves.append(matched)
+        self.review_index = 0
         self._apply_review_index()
 
     def _apply_review_index(self) -> None:
@@ -1065,6 +1149,38 @@ class GameWindow:
             return
         self.review_index = len(self.review_moves)
         self._apply_review_index()
+
+    def _parse_uci_on_board(self, board, uci: str) -> Optional[Move]:
+        if not uci or len(uci) < 4:
+            return None
+        from_sq = uci[:2]
+        to_sq = uci[2:4]
+        promotion_char = uci[4] if len(uci) > 4 else None
+        from_idx = square_to_indices(from_sq)
+        to_idx = square_to_indices(to_sq)
+        if not from_idx or not to_idx:
+            return None
+        from_r, from_c = from_idx
+        to_r, to_c = to_idx
+        piece = board.get_piece(from_r, from_c)
+        if piece is None:
+            return None
+        promotion = None
+        if promotion_char:
+            if promotion_char == 'q': promotion = PieceType.QUEEN
+            elif promotion_char == 'r': promotion = PieceType.ROOK
+            elif promotion_char == 'b': promotion = PieceType.BISHOP
+            elif promotion_char == 'n': promotion = PieceType.KNIGHT
+        target_piece = board.get_piece(to_r, to_c)
+        is_capture = target_piece is not None
+        is_en_passant = False
+        if piece.kind == PieceType.PAWN and abs(to_c - from_c) == 1 and not is_capture:
+            is_en_passant = True
+            is_capture = True
+        is_castling = False
+        if piece.kind == PieceType.KING and abs(to_c - from_c) > 1:
+            is_castling = True
+        return Move(from_r, from_c, to_r, to_c, promotion, is_castling, is_en_passant)
 
     def compute_moves_from(self, row: int, col: int) -> Set[Tuple[int, int]]:
         result: Set[Tuple[int, int]] = set()
@@ -1381,37 +1497,32 @@ class GameWindow:
         self.last_frame_time = current_time
         
         if self.time_control is not None and not self.game.result:
-            # Rule: Pause clocks during AI computation and Animations
-            is_thinking = (self.turn_state == TURN_AI and self.ai_thread is not None and self.ai_thread.is_alive())
-            is_animating = (self.current_animation is not None)
-            
-            if not is_thinking and not is_animating:
-                if self.game.board.current_player == Color.WHITE:
-                    self.white_time -= dt
-                    if self.white_time <= 0:
-                        self.white_time = 0
-                        self.game.result = "Black wins on time"
-                        self.winning_dialog = WinningDialog(
-                            pygame.Rect(WINDOW_WIDTH//2 - 150, WINDOW_HEIGHT//2 - 100, 300, 200),
-                            "Black wins on time!",
-                            self.restart_game,
-                            self.return_to_menu,
-                            self.save_current_game,
-                            self.export_current_game
-                        )
-                else:
-                    self.black_time -= dt
-                    if self.black_time <= 0:
-                        self.black_time = 0
-                        self.game.result = "White wins on time"
-                        self.winning_dialog = WinningDialog(
-                            pygame.Rect(WINDOW_WIDTH//2 - 150, WINDOW_HEIGHT//2 - 100, 300, 200),
-                            "White wins on time!",
-                            self.restart_game,
-                            self.return_to_menu,
-                            self.save_current_game,
-                            self.export_current_game
-                        )
+            if self.game.board.current_player == Color.WHITE:
+                self.white_time -= dt
+                if self.white_time <= 0:
+                    self.white_time = 0
+                    self.game.result = "Black wins on time"
+                    self.winning_dialog = WinningDialog(
+                        pygame.Rect(WINDOW_WIDTH//2 - 150, WINDOW_HEIGHT//2 - 100, 300, 200),
+                        "Black wins on time!",
+                        self.restart_game,
+                        self.return_to_menu,
+                        self.save_current_game,
+                        self.export_current_game
+                    )
+            else:
+                self.black_time -= dt
+                if self.black_time <= 0:
+                    self.black_time = 0
+                    self.game.result = "White wins on time"
+                    self.winning_dialog = WinningDialog(
+                        pygame.Rect(WINDOW_WIDTH//2 - 150, WINDOW_HEIGHT//2 - 100, 300, 200),
+                        "White wins on time!",
+                        self.restart_game,
+                        self.return_to_menu,
+                        self.save_current_game,
+                        self.export_current_game
+                    )
 
     def draw_side_panel(self) -> None:
         board_y = (WINDOW_HEIGHT - BOARD_SIZE) // 2
@@ -1570,15 +1681,27 @@ class GameWindow:
                 self.message_overlay.show("Suggested move " + self.move_text(move), frames=180)
 
             if self.winning_dialog is not None:
-                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                    self.winning_dialog.handle_mouse_down(event.pos)
-                elif event.type == pygame.MOUSEMOTION:
-                    self.winning_dialog.handle_mouse_move(event.pos)
-                elif event.type == pygame.MOUSEWHEEL:
-                    self.history_panel.handle_scroll(event)
-                continue
+                if self.pgn_popup is not None:
+                    if event.type == pygame.MOUSEMOTION:
+                        self.pgn_popup.handle_mouse_move(event.pos)
+                    elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                        if self.pgn_popup.handle_mouse_down(event.pos):
+                            pass
+                    # Wheel events ignored for popup
+                    continue
+                else:
+                    if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                        self.winning_dialog.handle_mouse_down(event.pos)
+                    elif event.type == pygame.MOUSEMOTION:
+                        self.winning_dialog.handle_mouse_move(event.pos)
+                    elif event.type == pygame.MOUSEWHEEL:
+                        self.history_panel.handle_scroll(event)
+                    continue
 
             if event.type == pygame.KEYDOWN:
+                if getattr(self, "pgn_input_popup", None) is not None:
+                    self.pgn_input_popup.handle_key(event)
+                    continue
                 if event.key == pygame.K_ESCAPE:
                     if self.state == "playing":
                         self.return_to_menu()
@@ -1591,8 +1714,25 @@ class GameWindow:
                         self.review_home()
                     elif event.key == pygame.K_END:
                         self.review_end()
+                if self.state == "history":
+                    visible = 6
+                    max_scroll = max(0, len(self.history_entries) - visible)
+                    if event.key == pygame.K_UP:
+                        self.history_scroll = max(0, self.history_scroll - 1)
+                    elif event.key == pygame.K_DOWN:
+                        self.history_scroll = min(max_scroll, self.history_scroll + 1)
+                if self.state == "pgn_history":
+                    visible = 6
+                    max_scroll = max(0, len(self.pgn_entries) - visible)
+                    if event.key == pygame.K_UP:
+                        self.pgn_scroll = max(0, self.pgn_scroll - 1)
+                    elif event.key == pygame.K_DOWN:
+                        self.pgn_scroll = min(max_scroll, self.pgn_scroll + 1)
             elif event.type == pygame.MOUSEMOTION:
                 pos = event.pos
+                if getattr(self, "pgn_input_popup", None) is not None:
+                    self.pgn_input_popup.handle_mouse_move(pos)
+                    continue
                 if self.state == "playing":
                     self.board_renderer.update_hover(pos)
                     self.button_bar.handle_mouse_move(pos)
@@ -1622,6 +1762,9 @@ class GameWindow:
                         b.handle_mouse_move(pos)
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 pos = event.pos
+                if getattr(self, "pgn_input_popup", None) is not None:
+                    if self.pgn_input_popup.handle_mouse_down(pos):
+                        continue
                 if self.state == "playing":
                     if self.pgn_popup is not None:
                         if self.pgn_popup.handle_mouse_down(pos):
@@ -1645,18 +1788,57 @@ class GameWindow:
                     for b in self.menu_buttons:
                         b.handle_mouse_down(pos)
                 elif self.state == "history":
-                    for rect, filename in self.history_row_rects:
+                    for rect, filename, action in self.history_row_rects:
                         if rect.collidepoint(pos):
-                            if filename == "__BACK__":
+                            if action == "back":
                                 self.state = "menu"
                                 break
-                            try:
-                                data = self.saver.load_game(filename)
-                                self.resume_from_save(data)
-                                self.state = "playing"
-                                self.message_overlay.show("Loaded saved game", frames=180)
-                            except Exception:
-                                self.message_overlay.show("Load failed", frames=180)
+                            elif action == "load":
+                                try:
+                                    self.pgn_popup = None
+                                    self.pgn_input_popup = None
+                                    data = self.saver.load_game(filename)
+                                    self.resume_from_save(data)
+                                    self.state = "playing"
+                                    self.message_overlay.show("Loaded saved game", frames=180)
+                                except Exception:
+                                    self.message_overlay.show("Load failed", frames=180)
+                                break
+                            elif action == "delete":
+                                if self.saver.delete_game(filename):
+                                    self.message_overlay.show("Game deleted", frames=120)
+                                    self.history_entries = self.saver.list_saved_games()
+                                else:
+                                    self.message_overlay.show("Delete failed", frames=120)
+                                break
+                elif self.state == "pgn_history":
+                    for rect, entry, action in self.pgn_row_rects:
+                        if rect.collidepoint(pos):
+                            if action == "back":
+                                self.state = "menu"
+                                break
+                            elif action == "open_input":
+                                self.open_pgn_input()
+                                break
+                            elif action == "load":
+                                try:
+                                    text = self.importer.read_pgn(entry["dir"], entry["filename"])
+                                    san_moves = self.importer.extract_san_moves(text)
+                                    self._load_review_from_san_list(san_moves)
+                                    self.state = "playing"
+                                    self.message_overlay.show("PGN loaded", frames=180)
+                                except Exception:
+                                    self.message_overlay.show("PGN load failed", frames=180)
+                                break
+                            elif action == "delete":
+                                try:
+                                    path = os.path.join(entry["dir"], entry["filename"])
+                                    os.remove(path)
+                                    self.pgn_entries = self.importer.list_pgn_files()
+                                    self.message_overlay.show("PGN deleted", frames=120)
+                                except Exception:
+                                    self.message_overlay.show("Delete failed", frames=120)
+                                break
                 elif self.state == "difficulty":
                     for b in self.difficulty_buttons:
                         b.handle_mouse_down(pos)
@@ -1675,7 +1857,21 @@ class GameWindow:
                 if self.state == "playing":
                     self.history_panel.handle_scroll(event)
                 elif self.state == "history":
-                    self.history_scroll = max(0, self.history_scroll - event.y)
+                    visible = 6
+                    max_scroll = max(0, len(self.history_entries) - visible)
+                    self.history_scroll = min(max_scroll, max(0, self.history_scroll - event.y))
+                elif self.state == "pgn_history":
+                    visible = 6
+                    max_scroll = max(0, len(self.pgn_entries) - visible)
+                    self.pgn_scroll = min(max_scroll, max(0, self.pgn_scroll - event.y))
+                if self.pgn_popup is not None:
+                    try:
+                        self.pgn_popup.handle_wheel(event.y)
+                    except Exception:
+                        pass
+            elif event.type == pygame.KEYDOWN:
+                if getattr(self, "pgn_input_popup", None) is not None:
+                    self.pgn_input_popup.handle_key(event)
             elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
                 if self.state == "playing" and self.interaction.dragging:
                     pos = event.pos
@@ -1728,12 +1924,54 @@ class GameWindow:
                 load_btn = pygame.Rect(620, y + 15, 100, 40)
                 pygame.draw.rect(self.screen, (50, 150, 50), load_btn, border_radius=8)
                 self.screen.blit(font.render("Load", True, (255, 255, 255)), (650, y + 25))
-                self.history_row_rects.append((load_btn, g["filename"]))
+                delete_btn = pygame.Rect(510, y + 15, 100, 40)
+                pygame.draw.rect(self.screen, (180, 50, 50), delete_btn, border_radius=8)
+                self.screen.blit(font.render("Delete", True, (255, 255, 255)), (535, y + 25))
+                self.history_row_rects.append((load_btn, g["filename"], "load"))
+                self.history_row_rects.append((delete_btn, g["filename"], "delete"))
                 y += 80
             back_btn = pygame.Rect(50, y + 20, 140, 40)
             pygame.draw.rect(self.screen, (100, 100, 100), back_btn, border_radius=8)
             self.screen.blit(font.render("Back", True, (255, 255, 255)), (95, y + 30))
-            self.history_row_rects.append((back_btn, "__BACK__"))
+            self.history_row_rects.append((back_btn, "__BACK__", "back"))
+            self.message_overlay.draw(self.screen, self.small_font)
+            pygame.display.flip()
+            return
+        if self.state == "pgn_history":
+            self.screen.fill((40, 40, 40))
+            title = pygame.font.Font(None, 56).render("Load PGN", True, (255, 255, 255))
+            self.screen.blit(title, (50, 30))
+            # Open input popup shortcut
+            btn = pygame.Rect(WINDOW_WIDTH - 220, 40, 160, 36)
+            pygame.draw.rect(self.screen, (70, 130, 70), btn, border_radius=8)
+            self.screen.blit(pygame.font.Font(None, 24).render("Load From Text", True, (255,255,255)), (WINDOW_WIDTH - 205, 48))
+            self.pgn_row_rects = [(btn, {"dir":"", "filename":""}, "open_input")]
+            y = 120
+            # add rows after the input button
+            files = self.pgn_entries
+            font = pygame.font.Font(None, 22)
+            for i in range(self.pgn_scroll, min(self.pgn_scroll + 6, len(files))):
+                e = files[i]
+                rect = pygame.Rect(50, y, 700, 70)
+                pygame.draw.rect(self.screen, (70, 70, 70), rect, border_radius=8)
+                self.screen.blit(font.render(e.get("date", ""), True, (200, 200, 200)), (70, y + 10))
+                info = f"{e.get('filename','')} ({e.get('dir','')})"
+                self.screen.blit(font.render(info, True, (180, 200, 120)), (70, y + 35))
+                load_btn = pygame.Rect(620, y + 15, 100, 40)
+                pygame.draw.rect(self.screen, (50, 150, 50), load_btn, border_radius=8)
+                self.screen.blit(font.render("Load", True, (255, 255, 255)), (650, y + 25))
+                delete_btn = pygame.Rect(510, y + 15, 100, 40)
+                pygame.draw.rect(self.screen, (180, 50, 50), delete_btn, border_radius=8)
+                self.screen.blit(font.render("Delete", True, (255, 255, 255)), (535, y + 25))
+                self.pgn_row_rects.append((load_btn, e, "load"))
+                self.pgn_row_rects.append((delete_btn, e, "delete"))
+                y += 80
+            back_btn = pygame.Rect(50, y + 20, 140, 40)
+            pygame.draw.rect(self.screen, (100, 100, 100), back_btn, border_radius=8)
+            self.screen.blit(font.render("Back", True, (255, 255, 255)), (95, y + 30))
+            self.pgn_row_rects.append((back_btn, {"dir":"", "filename":""}, "back"))
+            if getattr(self, "pgn_input_popup", None) is not None:
+                self.pgn_input_popup.draw(self.screen, self.button_font, self.small_font)
             self.message_overlay.draw(self.screen, self.small_font)
             pygame.display.flip()
             return
@@ -1853,8 +2091,6 @@ class GameWindow:
         self.btn_main_menu.draw(self.screen, self.button_font)
         if self.promotion_dialog is not None and self.interaction.awaiting_promotion:
             self.promotion_dialog.draw(self.screen, self.side_font)
-        if self.pgn_popup is not None:
-            self.pgn_popup.draw(self.screen, self.button_font, self.small_font)
         self.message_overlay.draw(self.screen, self.small_font)
         if self.current_animation is not None:
             t = self.current_animation.progress()
@@ -1895,6 +2131,10 @@ class GameWindow:
             
         if self.winning_dialog is not None:
             self.winning_dialog.draw(self.screen, self.button_font)
+        if self.pgn_popup is not None:
+            self.pgn_popup.draw(self.screen, self.button_font, self.small_font)
+        if getattr(self, "pgn_input_popup", None) is not None:
+            self.pgn_input_popup.draw(self.screen, self.button_font, self.small_font)
 
         pygame.display.flip()
 
@@ -1908,13 +2148,12 @@ class GameWindow:
 
     def open_pgn_popup(self) -> None:
         pgn = self.exporter.generate(self)
-        popup = SimplePopup(
-            pygame.Rect(WINDOW_WIDTH // 2 - 220, WINDOW_HEIGHT // 2 - 140, 440, 280),
-            "PGN Exported",
-            "Your game PGN is ready."
+        popup = TextPopup(
+            pygame.Rect(WINDOW_WIDTH // 2 - 260, WINDOW_HEIGHT // 2 - 180, 520, 340),
+            "Export PGN",
+            pgn
         )
-        popup.add_button("Copy to Clipboard", lambda: self._copy_pgn(pgn))
-        popup.add_button("Save File", lambda: self._save_pgn_file())
+        popup.add_button("Copy", lambda: self._copy_pgn(pgn))
         popup.add_button("Close", lambda: self._close_pgn_popup())
         self.pgn_popup = popup
 
@@ -1924,7 +2163,42 @@ class GameWindow:
             _pc.copy(pgn)
             self.message_overlay.show("PGN copied to clipboard", frames=180)
         except Exception:
-            self.message_overlay.show("Clipboard not available", frames=180)
+            try:
+                import pygame.scrap as scrap
+                scrap.init()
+                scrap.put(scrap.SCRAP_TEXT, pgn.encode("utf-8"))
+                self.message_overlay.show("PGN copied to clipboard", frames=180)
+            except Exception:
+                try:
+                    import tkinter as tk
+                    r = tk.Tk()
+                    r.withdraw()
+                    r.clipboard_clear()
+                    r.clipboard_append(pgn)
+                    r.update()  # keep clipboard after the window is destroyed
+                    r.destroy()
+                    self.message_overlay.show("PGN copied to clipboard", frames=180)
+                except Exception:
+                    try:
+                        CF_UNICODETEXT = 13
+                        GMEM_MOVEABLE = 0x0002
+                        user32 = ctypes.windll.user32
+                        kernel32 = ctypes.windll.kernel32
+                        if user32.OpenClipboard(0):
+                            user32.EmptyClipboard()
+                            buf = ctypes.create_unicode_buffer(pgn)
+                            size = (len(pgn) + 1) * ctypes.sizeof(ctypes.c_wchar)
+                            hglb = kernel32.GlobalAlloc(GMEM_MOVEABLE, size)
+                            lock = kernel32.GlobalLock(hglb)
+                            ctypes.memmove(lock, buf, size)
+                            kernel32.GlobalUnlock(hglb)
+                            user32.SetClipboardData(CF_UNICODETEXT, hglb)
+                            user32.CloseClipboard()
+                            self.message_overlay.show("PGN copied to clipboard", frames=180)
+                        else:
+                            self.message_overlay.show("Clipboard not available", frames=180)
+                    except Exception:
+                        self.message_overlay.show("Clipboard not available", frames=180)
 
     def _save_pgn_file(self) -> None:
         try:
@@ -1937,6 +2211,57 @@ class GameWindow:
 
     def _close_pgn_popup(self) -> None:
         self.pgn_popup = None
+        self.pgn_preview_text = ""
+
+    def open_pgn_input(self) -> None:
+        ip = InputPopup(
+            pygame.Rect(WINDOW_WIDTH // 2 - 260, WINDOW_HEIGHT // 2 - 140, 520, 220),
+            "Load PGN",
+            "Enter PGN text or a full file path:"
+        )
+        ip.add_button("Load From Text", lambda: self._load_from_input_text(ip))
+        ip.add_button("Load From File", lambda: self._load_from_input_file(ip))
+        self.pgn_input_popup = ip
+
+    def _load_from_input_text(self, ip: InputPopup) -> None:
+        text = getattr(ip, "text", "")
+        if not text.strip():
+            self.message_overlay.show("PGN text is empty", frames=180)
+            return
+        san_moves = self.importer.extract_san_moves(text)
+        self._load_review_from_san_list(san_moves)
+        self.pgn_input_popup = None
+        self.state = "playing"
+
+    def _load_from_input_file(self, ip: InputPopup) -> None:
+        path = getattr(ip, "text", "")
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                text = f.read()
+            san_moves = self.importer.extract_san_moves(text)
+            self._load_review_from_san_list(san_moves)
+            self.pgn_input_popup = None
+            self.state = "playing"
+        except Exception:
+            self.message_overlay.show("Invalid file path", frames=180)
+
+    def _load_review_from_san_list(self, san_moves: List[str]) -> None:
+        self.review_mode = True
+        self.review_moves = []
+        base = Game()
+        for san in san_moves:
+            matched = None
+            for m in base.get_legal_moves():
+                if get_algebraic_notation(base.board, m) == san:
+                    matched = m
+                    break
+            if matched:
+                base.apply_move(matched)
+                self.review_moves.append(matched)
+            else:
+                break
+        self.review_index = 0
+        self._apply_review_index()
 
     def run(self) -> None:
         while self.running:
