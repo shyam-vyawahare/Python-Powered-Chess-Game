@@ -4,7 +4,7 @@ Python Chess Game
 Overview
 --------
 
-This is a console-based chess game implemented in Python. It supports:
+This is a game.lib based chess game implemented in Python. It supports:
 - Full chess rules, including castling, en passant, and pawn promotion
 - Two-player mode (human vs human)
 - Single-player mode (human vs computer) with multiple difficulty levels
@@ -64,17 +64,7 @@ The script:
 Game Controls
 -------------
 
-- Enter moves as:
-  - `e2 e4`
-  - `e2-e4`
-  - `e2e4`
-- Commands during the game:
-  - `resign` – resign the game
-  - `draw` – offer or accept a draw
-  - `undo` – undo the last move (if available)
-  - `history` – show move history
-  - `moves e2` – list legal moves for the piece on `e2`
-  - `quit` or `exit` – terminate the game
+- Click on the pieces and their movable spots are highlighted, then clicking on highlighted spot moves your piece, also you can simply drag and drop the piece wherever you want to move.
 
 Pawn Promotion
 --------------
